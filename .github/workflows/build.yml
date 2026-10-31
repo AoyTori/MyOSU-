@@ -45,7 +45,7 @@ jobs:
           while IFS= read -r d; do INC="$INC -I$d"; done < <(find src -type d)
           for d in libraries/*/include; do INC="$INC -I$d"; done
           export INC
-          export FLAGS="-std=c++11 -O3 -c -fmessage-length=0 -w -D__GXX_EXPERIMENTAL_CXX0X__"
+          export FLAGS="-std=c++11 -O3 -c -fmessage-length=0 -w -fpermissive -D__GXX_EXPERIMENTAL_CXX0X__ -D__gl_glext_h_ -D__glext_h_ -D__wgl_wglext_h_ -D__wglext_h_"
           find src -name '*.cpp' | xargs -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; g++ $FLAGS $INC -o "$o" "{}" || { echo "FEHLER in {}"; exit 255; }'
           find src -name '*.c' | xargs -r -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; gcc -O3 -c -w $INC -o "$o" "{}" || { echo "FEHLER in {}"; exit 255; }'
           LIBDIRS=""
