@@ -15,8 +15,8 @@ jobs:
 
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
-          install: mingw-w64-x86_64-gcc git
+          msystem: MINGW32
+          install: mingw-w64-i686-gcc git
 
       - name: McEngine + McOsu holen, Patches anwenden
         run: |
@@ -52,12 +52,12 @@ jobs:
           if [ -s out/fehler.txt ]; then echo "===== FEHLER IN DIESEN DATEIEN ====="; cat out/fehler.txt; exit 1; fi
           LIBDIRS=""
           for d in libraries/*/lib/windows; do LIBDIRS="$LIBDIRS -L$d"; done
-          g++ -s -o out/McOsu.exe out/*.o $LIBDIRS \
+          g++ -s -static-libgcc -static-libstdc++ -o out/McOsu.exe out/*.o $LIBDIRS \
             -logg -lADLMIDI -lmad -lmodplug -lsmpeg -lgme -lvorbis -lopus -lvorbisfile -ldiscord-rpc -lsteam_api \
             -lSDL2_mixer_ext.dll -lSDL2 -ld3dcompiler_47 -ld3d11 -ldxgi -lopenvr_api -llibcurl -llibxinput9_1_0 \
             -llibBulletSoftBody -llibBulletDynamics -llibBulletCollision -llibLinearMath -lfreetype -lopengl32 \
             -lOpenCL -lvulkan-1 -lglew32 -lglu32 -lgdi32 -lbass -lbass_fx -lcomctl32 -lDwmapi -lComdlg32 -lpsapi \
-            -lenet -lws2_32 -lwinmm -lpthread -llibjpeg -llibatomic
+            -lenet -lws2_32 -lwinmm -Wl,-Bstatic -lpthread -Wl,-Bdynamic -llibjpeg -llibatomic
           ls -la out/McOsu.exe
 
       - uses: actions/upload-artifact@v4
