@@ -57,7 +57,7 @@ jobs:
             -lSDL2_mixer_ext.dll -lSDL2 -ld3dcompiler_47 -ld3d11 -ldxgi -lopenvr_api -llibcurl -llibxinput9_1_0 \
             -llibBulletSoftBody -llibBulletDynamics -llibBulletCollision -llibLinearMath -lfreetype -lopengl32 \
             -lOpenCL -lvulkan-1 -lglew32 -lglu32 -lgdi32 -lbass -lbass_fx -lcomctl32 -lDwmapi -lComdlg32 -lpsapi \
-            -lenet -lws2_32 -lwinmm -Wl,-Bstatic -lpthread -Wl,-Bdynamic -llibjpeg -llibatomic
+            -lenet -lws2_32 -lwinhttp -lwinmm -Wl,-Bstatic -lpthread -Wl,-Bdynamic -llibjpeg -llibatomic
           mkdir -p dist
           cp out/McOsu.exe dist/
           cp build/*.dll dist/
