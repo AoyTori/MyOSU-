@@ -7,17 +7,20 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
 
       - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
-          install: mingw-w64-x86_64-gcc git patch
+          install: mingw-w64-x86_64-gcc git
 
       - name: McEngine + McOsu holen, Patches anwenden
-        shell: msys2 {0}
         run: |
+          set -e
           git config --global core.autocrlf false
           git clone --depth 1 https://github.com/McKay42/McEngine.git
           git clone --depth 1 https://github.com/McKay42/McOsu.git
@@ -30,18 +33,33 @@ jobs:
           sed -i 's|^#include "FrameworkTest.h"|//#include "FrameworkTest.h"|' "$E"
           sed -i 's|//m_app = new Osu();|m_app = new Osu();|' "$E"
           sed -i 's|^\(\s*\)m_app = new FrameworkTest();|\1//m_app = new FrameworkTest();|' "$E"
-          rm -rf McEngine/McEngine/src/App/FrameworkTest McEngine/McEngine/src/App/Asteroids \
-                 McEngine/McEngine/src/App/Tetris McEngine/McEngine/src/App/GUICoherenceMode \
-                 McEngine/McEngine/src/App/UIFrameworkTest
+          cd McEngine/McEngine/src/App
+          rm -rf FrameworkTest Asteroids Tetris GUICoherenceMode UIFrameworkTest
 
       - name: Kompilieren
-        shell: cmd
         run: |
-          set PATH=%RUNNER_TEMP%\msys64\mingw64\bin;%PATH%
-          cd McEngine\McEngine
-          call build.bat < nul
+          set -e
+          cd McEngine/McEngine
+          mkdir -p out
+          INC=""
+          while IFS= read -r d; do INC="$INC -I$d"; done < <(find src -type d)
+          for d in libraries/*/include; do INC="$INC -I$d"; done
+          export INC
+          export FLAGS="-std=c++11 -O3 -c -fmessage-length=0 -w -D__GXX_EXPERIMENTAL_CXX0X__"
+          find src -name '*.cpp' | xargs -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; g++ $FLAGS $INC -o "$o" "{}" || { echo "FEHLER in {}"; exit 255; }'
+          find src -name '*.c' | xargs -r -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; gcc -O3 -c -w $INC -o "$o" "{}" || { echo "FEHLER in {}"; exit 255; }'
+          LIBDIRS=""
+          for d in libraries/*/lib/windows; do LIBDIRS="$LIBDIRS -L$d"; done
+          g++ -s -o out/McOsu.exe out/*.o $LIBDIRS \
+            -logg -lADLMIDI -lmad -lmodplug -lsmpeg -lgme -lvorbis -lopus -lvorbisfile -ldiscord-rpc -lsteam_api \
+            -lSDL2_mixer_ext.dll -lSDL2 -ld3dcompiler_47 -ld3d11 -ldxgi -lopenvr_api -llibcurl -llibxinput9_1_0 \
+            -llibBulletSoftBody -llibBulletDynamics -llibBulletCollision -llibLinearMath -lfreetype -lopengl32 \
+            -lOpenCL -lvulkan-1 -lglew32 -lglu32 -lgdi32 -lbass -lbass_fx -lcomctl32 -lDwmapi -lComdlg32 -lpsapi \
+            -lenet -lws2_32 -lwinmm -lpthread -llibjpeg -llibatomic
+          ls -la out/McOsu.exe
 
       - uses: actions/upload-artifact@v4
         with:
           name: McOsu-exe
-          path: McEngine/McEngine/Windows Release/*.exe
+          path: McEngine/McEngine/out/McOsu.exe
+          if-no-files-found: error
