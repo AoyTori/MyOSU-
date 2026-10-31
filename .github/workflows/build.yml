@@ -1,0 +1,46 @@
+name: Build McOsu (eigener Client)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc git patch
+
+      - name: McEngine + McOsu holen, Patches anwenden
+        shell: msys2 {0}
+        run: |
+          git clone --depth 1 https://github.com/McKay42/McEngine.git
+          git clone --depth 1 https://github.com/McKay42/McOsu.git
+          cd McOsu
+          for p in ../patches/*.patch; do git apply --whitespace=nowarn "$p"; done
+          cd ..
+          cp -r McOsu/src/App/Osu McEngine/McEngine/src/App/Osu
+          E=McEngine/McEngine/src/Engine/Engine.cpp
+          sed -i 's|^//#include "Osu.h"|#include "Osu.h"|' "$E"
+          sed -i 's|^#include "FrameworkTest.h"|//#include "FrameworkTest.h"|' "$E"
+          sed -i 's|//m_app = new Osu();|m_app = new Osu();|' "$E"
+          sed -i 's|^\(\s*\)m_app = new FrameworkTest();|\1//m_app = new FrameworkTest();|' "$E"
+          rm -rf McEngine/McEngine/src/App/FrameworkTest McEngine/McEngine/src/App/Asteroids \
+                 McEngine/McEngine/src/App/Tetris McEngine/McEngine/src/App/GUICoherenceMode \
+                 McEngine/McEngine/src/App/UIFrameworkTest
+
+      - name: Kompilieren
+        shell: cmd
+        run: |
+          set PATH=%RUNNER_TEMP%\msys64\mingw64\bin;%PATH%
+          cd McEngine\McEngine
+          call build.bat < nul
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: McOsu-exe
+          path: McEngine/McEngine/Windows Release/*.exe
