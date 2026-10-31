@@ -1,0 +1,171 @@
+From b0a7767cf5fdab23d6b5a38f5a8452112b267e7f Mon Sep 17 00:00:00 2001
+From: hidden-rx <none>
+Date: Sat, 31 Oct 2026 22:21:08 +0100
+Subject: [PATCH] Hidden Relax option + key overlay taps in Relax
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MvYBfaJwyXivAtVfcZSFtM
+---
+ src/App/Osu/Osu.cpp                         | 11 ++++++++++-
+ src/App/Osu/Osu.h                           |  1 +
+ src/App/Osu/OsuHUD.cpp                      |  4 ++--
+ src/App/Osu/OsuModSelector.cpp              |  6 +++++-
+ src/App/Osu/OsuOptionsMenu.cpp              |  2 ++
+ src/App/Osu/OsuRankingScreen.cpp            |  2 +-
+ src/App/Osu/OsuScore.cpp                    |  2 +-
+ src/App/Osu/OsuUISongBrowserScoreButton.cpp |  2 +-
+ 8 files changed, 23 insertions(+), 7 deletions(-)
+
+diff --git a/src/App/Osu/Osu.cpp b/src/App/Osu/Osu.cpp
+index ac2d685..5e561e2 100644
+--- a/src/App/Osu/Osu.cpp
++++ b/src/App/Osu/Osu.cpp
+@@ -104,6 +104,9 @@ ConVar osu_skip_breaks_enabled("osu_skip_breaks_enabled", true, FCVAR_NONE, "ena
+ ConVar osu_seek_delta("osu_seek_delta", 5, FCVAR_NONE, "how many seconds to skip backward/forward when quick seeking");
+ 
+ ConVar osu_mods("osu_mods", "", FCVAR_NONE);
++// hidden-rx: Relax as a permanent option instead of a mod
++ConVar osu_relax_option("osu_relax_option", false, FCVAR_NONE, "play with Relax without it being a mod (survives Reset All Mods)");
++ConVar osu_relax_hide_indicator("osu_relax_hide_indicator", true, FCVAR_NONE, "never show Relax in mod icons, score lists or Discord status");
+ ConVar osu_mod_touchdevice("osu_mod_touchdevice", false, FCVAR_NONE, "used for force applying touch pp nerf always");
+ ConVar osu_mod_fadingcursor("osu_mod_fadingcursor", false, FCVAR_NONE);
+ ConVar osu_mod_fadingcursor_combo("osu_mod_fadingcursor_combo", 50.0f, FCVAR_NONE);
+@@ -299,6 +302,7 @@ Osu::Osu(Osu2 *osu2, int instanceID)
+ 	osu_volume_master.setCallback( fastdelegate::MakeDelegate(this, &Osu::onMasterVolumeChange) );
+ 	osu_volume_music.setCallback( fastdelegate::MakeDelegate(this, &Osu::onMusicVolumeChange) );
+ 	osu_speed_override.setCallback( fastdelegate::MakeDelegate(this, &Osu::onSpeedChange) );
++	osu_relax_option.setCallback( fastdelegate::MakeDelegate(this, &Osu::onRelaxOptionChange) );
+ 	osu_pitch_override.setCallback( fastdelegate::MakeDelegate(this, &Osu::onPitchChange) );
+ 
+ 	m_osu_playfield_rotation->setCallback( fastdelegate::MakeDelegate(this, &Osu::onPlayfieldChange) );
+@@ -1226,7 +1230,7 @@ void Osu::updateMods()
+ 
+ 	m_bModAuto = osu_mods.getString().find("auto") != -1;
+ 	m_bModAutopilot = osu_mods.getString().find("autopilot") != -1;
+-	m_bModRelax = osu_mods.getString().find("relax") != -1;
++	m_bModRelax = osu_mods.getString().find("relax") != -1 || osu_relax_option.getBool();
+ 	m_bModSpunout = osu_mods.getString().find("spunout") != -1;
+ 	m_bModTarget = osu_mods.getString().find("practicetarget") != -1;
+ 	m_bModScorev2 = osu_mods.getString().find("v2") != -1;
+@@ -2752,3 +2756,8 @@ bool Osu::findIgnoreCase(const std::string &haystack, const std::string &needle)
+ 
+ 	return (it != haystack.end());
+ }
++
++void Osu::onRelaxOptionChange(UString oldValue, UString newValue)
++{
++	updateMods();
++}
+diff --git a/src/App/Osu/Osu.h b/src/App/Osu/Osu.h
+index 3d319fe..eb4e5ab 100644
+--- a/src/App/Osu/Osu.h
++++ b/src/App/Osu/Osu.h
+@@ -227,6 +227,7 @@ private:
+ 	void onMasterVolumeChange(UString oldValue, UString newValue);
+ 	void onMusicVolumeChange(UString oldValue, UString newValue);
+ 	void onSpeedChange(UString oldValue, UString newValue);
++	void onRelaxOptionChange(UString oldValue, UString newValue);
+ 	void onPitchChange(UString oldValue, UString newValue);
+ 
+ 	void onPlayfieldChange(UString oldValue, UString newValue);
+diff --git a/src/App/Osu/OsuHUD.cpp b/src/App/Osu/OsuHUD.cpp
+index 5c30d1a..b924abb 100644
+--- a/src/App/Osu/OsuHUD.cpp
++++ b/src/App/Osu/OsuHUD.cpp
+@@ -348,7 +348,7 @@ void OsuHUD::draw(Graphics *g)
+ 	{
+ 		if (osu_draw_inputoverlay.getBool() && beatmapStd != NULL)
+ 		{
+-			const bool isAutoClicking = (m_osu->getModAuto() || m_osu->getModRelax());
++			const bool isAutoClicking = m_osu->getModAuto(); // hidden-rx: key overlay + taps also in Relax (like lazer)
+ 			if (!isAutoClicking)
+ 				drawInputOverlay(g, m_osu->getScore()->getKeyCount(1), m_osu->getScore()->getKeyCount(2), m_osu->getScore()->getKeyCount(3), m_osu->getScore()->getKeyCount(4));
+ 		}
+@@ -431,7 +431,7 @@ void OsuHUD::draw(Graphics *g)
+ 	{
+ 		if (osu_draw_inputoverlay.getBool() && beatmapStd != NULL)
+ 		{
+-			const bool isAutoClicking = (m_osu->getModAuto() || m_osu->getModRelax());
++			const bool isAutoClicking = m_osu->getModAuto(); // hidden-rx: key overlay + taps also in Relax (like lazer)
+ 			if (!isAutoClicking)
+ 				drawInputOverlay(g, m_osu->getScore()->getKeyCount(1), m_osu->getScore()->getKeyCount(2), m_osu->getScore()->getKeyCount(3), m_osu->getScore()->getKeyCount(4));
+ 		}
+diff --git a/src/App/Osu/OsuModSelector.cpp b/src/App/Osu/OsuModSelector.cpp
+index 1d43a78..b9844ae 100644
+--- a/src/App/Osu/OsuModSelector.cpp
++++ b/src/App/Osu/OsuModSelector.cpp
+@@ -301,6 +301,7 @@ void OsuModSelector::updateButtons(bool initial)
+ 	getModButtonOnGrid(5, 1)->setAvailable(!m_osu_mod_touchdevice_ref->getBool());
+ 
+ 	m_modButtonRelax = setModButtonOnGrid(0, 2, 0, initial && m_osu->getModRelax(), "relax", "You don't need to click.\nGive your clicking/tapping fingers a break from the heat of things.\n** UNRANKED **", [this]() -> OsuSkinImage *{return m_osu->getSkin()->getSelectionModRelax();});
++	m_modButtonRelax->setVisible(false); // hidden-rx: Relax lives in Options > Gameplay now
+ 	m_modButtonAutopilot = setModButtonOnGrid(1, 2, 0, initial && m_osu->getModAutopilot(), "autopilot", "Automatic cursor movement - just follow the rhythm.\n** UNRANKED **", [this]() -> OsuSkinImage *{return m_osu->getSkin()->getSelectionModAutopilot();});
+ 	m_modButtonSpunout = setModButtonOnGrid(2, 2, 0, initial && m_osu->getModSpunout(), "spunout", "Spinners will be automatically completed.", [this]() -> OsuSkinImage *{return m_osu->getSkin()->getSelectionModSpunOut();});
+ 	m_modButtonAuto = setModButtonOnGrid(3, 2, 0, initial && m_osu->getModAuto(), "auto", "Watch a perfect automated play through the song.", [this]() -> OsuSkinImage *{return m_osu->getSkin()->getSelectionModAutoplay();});
+@@ -708,7 +709,10 @@ void OsuModSelector::onKeyDown(KeyboardEvent &key)
+ 	if (key == (KEYCODE)OsuKeyBindings::MOD_FLASHLIGHT.getInt())
+ 		m_modButtonFlashlight->click();
+ 	if (key == (KEYCODE)OsuKeyBindings::MOD_RELAX.getInt())
+-		m_modButtonRelax->click();
++	{
++		ConVar *relaxOption = convar->getConVarByName("osu_relax_option");
++		relaxOption->setValue(!relaxOption->getBool());
++	}
+ 	if (key == (KEYCODE)OsuKeyBindings::MOD_AUTOPILOT.getInt())
+ 		m_modButtonAutopilot->click();
+ 	if (key == (KEYCODE)OsuKeyBindings::MOD_SPUNOUT.getInt())
+diff --git a/src/App/Osu/OsuOptionsMenu.cpp b/src/App/Osu/OsuOptionsMenu.cpp
+index a8a5508..8c42c16 100644
+--- a/src/App/Osu/OsuOptionsMenu.cpp
++++ b/src/App/Osu/OsuOptionsMenu.cpp
+@@ -1025,6 +1025,8 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
+ 	addCheckbox("Don't change dim level during breaks", "Makes the background basically impossible to see during breaks.\nNot recommended.", convar->getConVarByName("osu_background_dont_fade_during_breaks"));
+ 	addCheckbox("Show approach circle on first \"Hidden\" object", convar->getConVarByName("osu_show_approach_circle_on_first_hidden_object"));
+ 	addCheckbox("SuddenDeath restart on miss", "Skips the failing animation, and instantly restarts like SS/PF.", convar->getConVarByName("osu_mod_suddendeath_restart"));
++	addCheckbox("Relax", "Play with Relax (no clicking needed) as a permanent option.\nIt is not a mod, and \"Reset All Mods\" won't turn it off.", convar->getConVarByName("osu_relax_option"));
++	addCheckbox("Hide Relax indicator", "Never show Relax in mod icons, score lists or Discord status.", convar->getConVarByName("osu_relax_hide_indicator"));
+ 	addCheckbox("Show Skip Button during Intro", "Skip intro to first hitobject.", convar->getConVarByName("osu_skip_intro_enabled"));
+ 	addCheckbox("Show Skip Button during Breaks", "Skip breaks in the middle of beatmaps.", convar->getConVarByName("osu_skip_breaks_enabled"));
+ 	addSpacer();
+diff --git a/src/App/Osu/OsuRankingScreen.cpp b/src/App/Osu/OsuRankingScreen.cpp
+index c715bb8..b2e23d0 100644
+--- a/src/App/Osu/OsuRankingScreen.cpp
++++ b/src/App/Osu/OsuRankingScreen.cpp
+@@ -314,7 +314,7 @@ void OsuRankingScreen::draw(Graphics *g)
+ 		drawModImage(g, m_osu->getSkin()->getSelectionModTarget(), modPos, modPosMax);
+ 	if (m_bModSpunout)
+ 		drawModImage(g, m_osu->getSkin()->getSelectionModSpunOut(), modPos, modPosMax);
+-	if (m_bModRelax)
++	if (m_bModRelax && !convar->getConVarByName("osu_relax_hide_indicator")->getBool())
+ 		drawModImage(g, m_osu->getSkin()->getSelectionModRelax(), modPos, modPosMax);
+ 	if (m_bModNF)
+ 		drawModImage(g, m_osu->getSkin()->getSelectionModNoFail(), modPos, modPosMax);
+diff --git a/src/App/Osu/OsuScore.cpp b/src/App/Osu/OsuScore.cpp
+index 0f7f950..7296495 100644
+--- a/src/App/Osu/OsuScore.cpp
++++ b/src/App/Osu/OsuScore.cpp
+@@ -590,7 +590,7 @@ UString OsuScore::getModsStringForRichPresence()
+ 		modsString.append("SD");
+ 	if (m_osu->getModDT())
+ 		modsString.append("DT");
+-	if (m_osu->getModRelax())
++	if (m_osu->getModRelax() && !convar->getConVarByName("osu_relax_hide_indicator")->getBool())
+ 		modsString.append("RX");
+ 	if (m_osu->getModHT())
+ 		modsString.append("HT");
+diff --git a/src/App/Osu/OsuUISongBrowserScoreButton.cpp b/src/App/Osu/OsuUISongBrowserScoreButton.cpp
+index 9f47f27..d952bb8 100644
+--- a/src/App/Osu/OsuUISongBrowserScoreButton.cpp
++++ b/src/App/Osu/OsuUISongBrowserScoreButton.cpp
+@@ -943,7 +943,7 @@ UString OsuUISongBrowserScoreButton::getModsStringForDisplay(int mods)
+ 		modsString.append("SD,");
+ 	if (mods & OsuReplay::Mods::DoubleTime)
+ 		modsString.append("DT,");
+-	if (mods & OsuReplay::Mods::Relax)
++	if ((mods & OsuReplay::Mods::Relax) && !convar->getConVarByName("osu_relax_hide_indicator")->getBool())
+ 		modsString.append("Relax,");
+ 	if (mods & OsuReplay::Mods::HalfTime)
+ 		modsString.append("HT,");
+-- 
+2.43.0
+
