@@ -18,10 +18,11 @@ jobs:
       - name: McEngine + McOsu holen, Patches anwenden
         shell: msys2 {0}
         run: |
+          git config --global core.autocrlf false
           git clone --depth 1 https://github.com/McKay42/McEngine.git
           git clone --depth 1 https://github.com/McKay42/McOsu.git
           cd McOsu
-          for p in ../patches/*.patch; do git apply --whitespace=nowarn "$p"; done
+          for p in ../patches/*.patch; do tr -d '\r' < "$p" > /tmp/fix.patch; git apply --whitespace=nowarn /tmp/fix.patch; done
           cd ..
           cp -r McOsu/src/App/Osu McEngine/McEngine/src/App/Osu
           E=McEngine/McEngine/src/Engine/Engine.cpp
