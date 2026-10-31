@@ -45,9 +45,11 @@ jobs:
           while IFS= read -r d; do INC="$INC -I$d"; done < <(find src -type d)
           for d in libraries/*/include; do INC="$INC -I$d"; done
           export INC
-          export FLAGS="-std=c++11 -O3 -c -fmessage-length=0 -w -fpermissive -D__GXX_EXPERIMENTAL_CXX0X__ -D__gl_glext_h_ -D__wgl_wglext_h_ -DWIN32STDMUTEX_H"
-          find src -name '*.cpp' | xargs -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; g++ $FLAGS $INC -o "$o" "{}" || { echo "FEHLER in {}"; exit 255; }'
-          find src -name '*.c' | xargs -r -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; gcc -O3 -c -w $INC -o "$o" "{}" || { echo "FEHLER in {}"; exit 255; }'
+          export FLAGS="-std=c++11 -O3 -c -fmessage-length=0 -w -fpermissive -D__GXX_EXPERIMENTAL_CXX0X__ -D__gl_glext_h_ -D__wgl_wglext_h_ -DWIN32STDMUTEX_H -DQWORD=ULONGLONG"
+          : > out/fehler.txt
+          find src -name '*.cpp' | xargs -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; g++ $FLAGS $INC -o "$o" "{}" 2> "$o.log" || { echo "{}" >> out/fehler.txt; cat "$o.log"; }'
+          find src -name '*.c' | xargs -r -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; gcc -O3 -c -w $INC -o "$o" "{}" 2> "$o.log" || { echo "{}" >> out/fehler.txt; cat "$o.log"; }'
+          if [ -s out/fehler.txt ]; then echo "===== FEHLER IN DIESEN DATEIEN ====="; cat out/fehler.txt; exit 1; fi
           LIBDIRS=""
           for d in libraries/*/lib/windows; do LIBDIRS="$LIBDIRS -L$d"; done
           g++ -s -o out/McOsu.exe out/*.o $LIBDIRS \
