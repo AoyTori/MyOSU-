@@ -1,0 +1,625 @@
+From 9e6da2665c57628b03038839a830f129ea872146 Mon Sep 17 00:00:00 2001
+From: myosu <none>
+Date: Sun, 1 Nov 2026 00:22:53 +0100
+Subject: [PATCH] Bancho profile via osu! API v2: avatar + rank in user button,
+ API settings in options
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MvYBfaJwyXivAtVfcZSFtM
+---
+ src/App/Osu/Osu.cpp                        |   3 +
+ src/App/Osu/OsuBanchoApi.cpp               | 430 +++++++++++++++++++++
+ src/App/Osu/OsuBanchoApi.h                 |  41 ++
+ src/App/Osu/OsuOptionsMenu.cpp             |  26 ++
+ src/App/Osu/OsuUISongBrowserUserButton.cpp |  22 +-
+ 5 files changed, 520 insertions(+), 2 deletions(-)
+ create mode 100644 src/App/Osu/OsuBanchoApi.cpp
+ create mode 100644 src/App/Osu/OsuBanchoApi.h
+
+diff --git a/src/App/Osu/Osu.cpp b/src/App/Osu/Osu.cpp
+index 5e561e2..850f6ab 100644
+--- a/src/App/Osu/Osu.cpp
++++ b/src/App/Osu/Osu.cpp
+@@ -39,6 +39,7 @@
+ #include "OsuUserStatsScreen.h"
+ #include "OsuKeyBindings.h"
+ #include "OsuUpdateHandler.h"
++#include "OsuBanchoApi.h"
+ #include "OsuNotificationOverlay.h"
+ #include "OsuTooltipOverlay.h"
+ #include "OsuGameRules.h"
+@@ -871,6 +872,8 @@ void Osu::update()
+ {
+ 	const int wheelDelta = engine->getMouse()->getWheelDeltaVertical(); // HACKHACK: songbrowser focus
+ 
++	OsuBanchoApi::update(); // myosu: Bancho profile (avatar, rank)
++
+ 	if (m_skin != NULL)
+ 		m_skin->update();
+ 
+diff --git a/src/App/Osu/OsuBanchoApi.cpp b/src/App/Osu/OsuBanchoApi.cpp
+new file mode 100644
+index 0000000..b3ee03a
+--- /dev/null
++++ b/src/App/Osu/OsuBanchoApi.cpp
+@@ -0,0 +1,430 @@
++//================ myosu: osu! API v2 (read-only, offline client) ================//
++//
++// Purpose:		fetches the player's Bancho profile (avatar, rank, pp) via the
++//				official osu! API v2 with client credentials. Read-only, nothing
++//				is ever submitted to Bancho.
++//
++//===============================================================================//
++
++#include "OsuBanchoApi.h"
++
++#include "Engine.h"
++#include "ConVar.h"
++#include "ResourceManager.h"
++#include "Image.h"
++
++#include <windows.h>
++#include <winhttp.h>
++
++#include <string>
++#include <vector>
++#include <thread>
++#include <mutex>
++#include <atomic>
++#include <fstream>
++#include <cstdlib>
++#include <cctype>
++
++ConVar osu_api_client_id("osu_api_client_id", "", FCVAR_NONE, "osu! API v2 OAuth client ID (osu.ppy.sh -> Settings -> OAuth -> New OAuth Application)");
++ConVar osu_api_client_secret("osu_api_client_secret", "", FCVAR_NONE, "osu! API v2 OAuth client secret");
++ConVar osu_api_username("osu_api_username", "", FCVAR_NONE, "your osu! username on Bancho (empty = use the McOsu player name)");
++
++namespace
++{
++
++// ---------------------------------------------------------------- shared state
++
++std::mutex g_mutex;
++std::atomic<bool> g_bRunning(false);
++OsuBanchoApi::Profile g_profile;          // guarded by g_mutex
++std::string g_avatarBytes;                // guarded by g_mutex, consumed by the main thread
++bool g_bAvatarPending = false;            // guarded by g_mutex
++UString g_status = "not configured";      // guarded by g_mutex
++
++std::string g_lastConfig;
++std::string g_fetchedConfig;
++double g_fLastConfigChangeTime = 0.0;
++bool g_bForceRefresh = false;
++Image *g_avatar = NULL;
++int g_iAvatarCounter = 0;
++
++void setStatus(const UString &status)
++{
++	std::lock_guard<std::mutex> lock(g_mutex);
++	g_status = status;
++}
++
++// ---------------------------------------------------------------- http (WinHTTP)
++
++std::wstring widen(const std::string &s)
++{
++	if (s.empty()) return std::wstring();
++	const int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), NULL, 0);
++	std::wstring out(len, L'\0');
++	MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], len);
++	return out;
++}
++
++bool httpRequest(const std::string &host, const std::string &path, const wchar_t *verb, const std::string &body, const std::string &headers, std::string &out, int &statusCode)
++{
++	out.clear();
++	statusCode = 0;
++	bool ok = false;
++
++	HINTERNET session = WinHttpOpen(L"myosu/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
++	if (session == NULL) return false;
++
++	WinHttpSetTimeouts(session, 5000, 5000, 10000, 15000);
++
++	HINTERNET connection = WinHttpConnect(session, widen(host).c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
++	if (connection != NULL)
++	{
++		HINTERNET request = WinHttpOpenRequest(connection, verb, widen(path).c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
++		if (request != NULL)
++		{
++			const std::wstring wheaders = widen(headers);
++			const BOOL sent = WinHttpSendRequest(request,
++					wheaders.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : wheaders.c_str(), wheaders.empty() ? 0 : (DWORD)-1L,
++					body.empty() ? WINHTTP_NO_REQUEST_DATA : (LPVOID)body.data(), (DWORD)body.size(), (DWORD)body.size(), 0);
++
++			if (sent && WinHttpReceiveResponse(request, NULL))
++			{
++				DWORD code = 0;
++				DWORD codeSize = sizeof(code);
++				WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &code, &codeSize, WINHTTP_NO_HEADER_INDEX);
++				statusCode = (int)code;
++
++				DWORD available = 0;
++				while (WinHttpQueryDataAvailable(request, &available) && available > 0)
++				{
++					std::string chunk(available, '\0');
++					DWORD read = 0;
++					if (!WinHttpReadData(request, &chunk[0], available, &read) || read == 0)
++						break;
++					out.append(chunk.data(), read);
++				}
++				ok = true;
++			}
++			WinHttpCloseHandle(request);
++		}
++		WinHttpCloseHandle(connection);
++	}
++	WinHttpCloseHandle(session);
++	return ok;
++}
++
++bool splitUrl(const std::string &url, std::string &host, std::string &path)
++{
++	const std::string prefix = "https://";
++	if (url.compare(0, prefix.size(), prefix) != 0) return false;
++	const size_t slash = url.find('/', prefix.size());
++	host = url.substr(prefix.size(), slash == std::string::npos ? std::string::npos : slash - prefix.size());
++	path = (slash == std::string::npos ? "/" : url.substr(slash));
++	return !host.empty();
++}
++
++std::string urlEncode(const std::string &s)
++{
++	static const char *hex = "0123456789ABCDEF";
++	std::string out;
++	for (unsigned char c : s)
++	{
++		if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~')
++			out += (char)c;
++		else
++		{
++			out += '%';
++			out += hex[c >> 4];
++			out += hex[c & 15];
++		}
++	}
++	return out;
++}
++
++std::string jsonEscape(const std::string &s)
++{
++	std::string out;
++	for (char c : s)
++	{
++		if (c == '"' || c == '\\') out += '\\';
++		out += c;
++	}
++	return out;
++}
++
++// ---------------------------------------------------------------- tiny json reader
++
++size_t skipWs(const std::string &j, size_t i)
++{
++	while (i < j.size() && (j[i] == ' ' || j[i] == '\n' || j[i] == '\r' || j[i] == '\t')) i++;
++	return i;
++}
++
++size_t skipString(const std::string &j, size_t i) // i at opening quote, returns index after closing quote
++{
++	i++;
++	while (i < j.size())
++	{
++		if (j[i] == '\\') i += 2;
++		else if (j[i] == '"') return i + 1;
++		else i++;
++	}
++	return j.size();
++}
++
++size_t skipValue(const std::string &j, size_t i)
++{
++	i = skipWs(j, i);
++	if (i >= j.size()) return i;
++	if (j[i] == '"') return skipString(j, i);
++	if (j[i] == '{' || j[i] == '[')
++	{
++		int depth = 0;
++		while (i < j.size())
++		{
++			if (j[i] == '"') { i = skipString(j, i); continue; }
++			if (j[i] == '{' || j[i] == '[') depth++;
++			else if (j[i] == '}' || j[i] == ']') { depth--; if (depth == 0) return i + 1; }
++			i++;
++		}
++		return i;
++	}
++	while (i < j.size() && j[i] != ',' && j[i] != '}' && j[i] != ']') i++;
++	return i;
++}
++
++// returns the start index of the value of "key" inside the object starting at objStart, or npos
++size_t findKey(const std::string &j, size_t objStart, const std::string &key)
++{
++	size_t i = skipWs(j, objStart);
++	if (i >= j.size() || j[i] != '{') return std::string::npos;
++	i++;
++	while (true)
++	{
++		i = skipWs(j, i);
++		if (i >= j.size() || j[i] == '}') return std::string::npos;
++		if (j[i] != '"') return std::string::npos;
++		const size_t keyEnd = skipString(j, i);
++		const std::string k = j.substr(i + 1, keyEnd - i - 2);
++		i = skipWs(j, keyEnd);
++		if (i >= j.size() || j[i] != ':') return std::string::npos;
++		i = skipWs(j, i + 1);
++		if (k == key) return i;
++		i = skipWs(j, skipValue(j, i));
++		if (i < j.size() && j[i] == ',') i++;
++	}
++}
++
++// raw value at a path like {"statistics", "pp"} (strings are returned without quotes, unescaped minimally)
++bool getField(const std::string &j, const std::vector<std::string> &path, std::string &out)
++{
++	size_t pos = 0;
++	for (const std::string &key : path)
++	{
++		pos = findKey(j, pos, key);
++		if (pos == std::string::npos) return false;
++	}
++	const size_t end = skipValue(j, pos);
++	std::string raw = j.substr(pos, end - pos);
++	if (raw == "null") return false;
++	if (!raw.empty() && raw[0] == '"')
++	{
++		std::string s;
++		for (size_t i = 1; i + 1 < raw.size(); i++)
++		{
++			if (raw[i] == '\\' && i + 2 < raw.size())
++			{
++				i++;
++				if (raw[i] == '/') s += '/';
++				else if (raw[i] == 'n') s += '\n';
++				else s += raw[i];
++			}
++			else
++				s += raw[i];
++		}
++		raw = s;
++	}
++	out = raw;
++	return true;
++}
++
++// ---------------------------------------------------------------- worker
++
++void fetchWorker(std::string clientId, std::string clientSecret, std::string username)
++{
++	setStatus("connecting ...");
++
++	// 1) access token (client credentials, read-only "public" scope)
++	std::string response;
++	int status = 0;
++	const std::string tokenBody = "{\"client_id\":" + clientId + ",\"client_secret\":\"" + jsonEscape(clientSecret) + "\",\"grant_type\":\"client_credentials\",\"scope\":\"public\"}";
++	if (!httpRequest("osu.ppy.sh", "/oauth/token", L"POST", tokenBody, "Content-Type: application/json\r\nAccept: application/json", response, status) || status != 200)
++	{
++		setStatus(status == 401 ? "wrong client ID or secret" : "no connection to osu.ppy.sh");
++		g_bRunning = false;
++		return;
++	}
++
++	std::string token;
++	if (!getField(response, {"access_token"}, token))
++	{
++		setStatus("unexpected token response");
++		g_bRunning = false;
++		return;
++	}
++
++	// 2) user profile
++	const std::string auth = "Authorization: Bearer " + token + "\r\nAccept: application/json";
++	if (!httpRequest("osu.ppy.sh", "/api/v2/users/" + urlEncode(username) + "/osu?key=username", L"GET", "", auth, response, status) || status != 200)
++	{
++		setStatus(status == 404 ? "user not found" : "could not load profile");
++		g_bRunning = false;
++		return;
++	}
++
++	OsuBanchoApi::Profile profile;
++	std::string value;
++	if (getField(response, {"id"}, value)) profile.userId = std::atoi(value.c_str());
++	if (getField(response, {"username"}, value)) profile.username = UString(value.c_str());
++	if (getField(response, {"country_code"}, value)) profile.countryCode = UString(value.c_str());
++	if (getField(response, {"statistics", "global_rank"}, value)) profile.globalRank = std::atoi(value.c_str());
++	if (getField(response, {"statistics", "country_rank"}, value)) profile.countryRank = std::atoi(value.c_str());
++	if (getField(response, {"statistics", "pp"}, value)) profile.pp = (float)std::atof(value.c_str());
++	if (getField(response, {"statistics", "hit_accuracy"}, value)) profile.accuracy = (float)std::atof(value.c_str());
++	profile.valid = (profile.userId > 0);
++
++	// 3) avatar
++	std::string avatarUrl, avatarBytes;
++	if (getField(response, {"avatar_url"}, avatarUrl))
++	{
++		std::string host, path;
++		if (splitUrl(avatarUrl, host, path))
++		{
++			if (!httpRequest(host, path, L"GET", "", "", avatarBytes, status) || status != 200)
++				avatarBytes.clear();
++		}
++	}
++
++	{
++		std::lock_guard<std::mutex> lock(g_mutex);
++		g_profile = profile;
++		if (!avatarBytes.empty())
++		{
++			g_avatarBytes = avatarBytes;
++			g_bAvatarPending = true;
++		}
++		g_status = profile.valid ? "connected" : "could not read profile";
++	}
++
++	g_bRunning = false;
++}
++
++std::string currentUsername()
++{
++	std::string name = osu_api_username.getString().toUtf8();
++	if (name.empty())
++	{
++		ConVar *nameCvar = convar->getConVarByName("name", false);
++		if (nameCvar != NULL)
++			name = nameCvar->getString().toUtf8();
++	}
++	return name;
++}
++
++} // namespace
++
++void OsuBanchoApi::update()
++{
++	const std::string clientId = osu_api_client_id.getString().toUtf8();
++	const std::string clientSecret = osu_api_client_secret.getString().toUtf8();
++	const std::string username = currentUsername();
++	const bool configured = (!clientId.empty() && !clientSecret.empty() && !username.empty());
++
++	// debounce: wait until the user has stopped typing in the options for a moment
++	const std::string config = clientId + "\n" + clientSecret + "\n" + username;
++	if (config != g_lastConfig)
++	{
++		g_lastConfig = config;
++		g_fLastConfigChangeTime = engine->getTime();
++	}
++
++	if (configured && !g_bRunning && (g_bForceRefresh || config != g_fetchedConfig) && engine->getTime() > g_fLastConfigChangeTime + 1.5)
++	{
++		bool idIsNumber = true;
++		for (char c : clientId)
++		{
++			if (c < '0' || c > '9') idIsNumber = false;
++		}
++
++		g_fetchedConfig = config;
++		g_bForceRefresh = false;
++
++		if (!idIsNumber)
++			setStatus("client ID must be a number");
++		else
++		{
++			g_bRunning = true;
++			std::thread(fetchWorker, clientId, clientSecret, username).detach();
++		}
++	}
++
++	// avatar: write to disk and load as image on the main thread
++	std::string avatarBytes;
++	{
++		std::lock_guard<std::mutex> lock(g_mutex);
++		if (g_bAvatarPending)
++		{
++			avatarBytes.swap(g_avatarBytes);
++			g_bAvatarPending = false;
++		}
++	}
++
++	if (!avatarBytes.empty())
++	{
++		const bool isPng = (avatarBytes.size() > 4 && (unsigned char)avatarBytes[0] == 0x89 && avatarBytes[1] == 'P');
++		const std::string fileName = std::string("myosu_avatar_") + std::to_string(g_iAvatarCounter++) + (isPng ? ".png" : ".jpg");
++
++		std::ofstream file(fileName.c_str(), std::ios::binary | std::ios::trunc);
++		if (file.good())
++		{
++			file.write(avatarBytes.data(), avatarBytes.size());
++			file.close();
++
++			char fullPath[MAX_PATH];
++			if (_fullpath(fullPath, fileName.c_str(), MAX_PATH) != NULL)
++			{
++				if (g_avatar != NULL)
++					engine->getResourceManager()->destroyResource(g_avatar);
++				g_avatar = engine->getResourceManager()->loadImageAbsUnnamed(UString(fullPath), true);
++			}
++		}
++	}
++}
++
++bool OsuBanchoApi::hasProfile()
++{
++	std::lock_guard<std::mutex> lock(g_mutex);
++	return g_profile.valid;
++}
++
++OsuBanchoApi::Profile OsuBanchoApi::getProfile()
++{
++	std::lock_guard<std::mutex> lock(g_mutex);
++	return g_profile;
++}
++
++Image *OsuBanchoApi::getAvatar()
++{
++	return (g_avatar != NULL && g_avatar->isReady()) ? g_avatar : NULL;
++}
++
++UString OsuBanchoApi::getStatus()
++{
++	std::lock_guard<std::mutex> lock(g_mutex);
++	return g_status;
++}
++
++void OsuBanchoApi::forceRefresh()
++{
++	g_bForceRefresh = true;
++}
+diff --git a/src/App/Osu/OsuBanchoApi.h b/src/App/Osu/OsuBanchoApi.h
+new file mode 100644
+index 0000000..9d153d8
+--- /dev/null
++++ b/src/App/Osu/OsuBanchoApi.h
+@@ -0,0 +1,41 @@
++//================ myosu: osu! API v2 (read-only, offline client) ================//
++//
++// Purpose:		fetches the player's Bancho profile (avatar, rank, pp) via the
++//				official osu! API v2 with client credentials. Read-only, nothing
++//				is ever submitted to Bancho.
++//
++//===============================================================================//
++
++#ifndef OSUBANCHOAPI_H
++#define OSUBANCHOAPI_H
++
++#include "cbase.h"
++
++class Image;
++
++class OsuBanchoApi
++{
++public:
++	struct Profile
++	{
++		bool valid = false;
++		int userId = 0;
++		UString username;
++		UString countryCode;
++		int globalRank = 0;
++		int countryRank = 0;
++		float pp = 0.0f;
++		float accuracy = 0.0f;
++	};
++
++	static void update(); // call every frame from the main thread
++
++	static bool hasProfile();
++	static Profile getProfile();
++	static Image *getAvatar();
++	static UString getStatus();
++
++	static void forceRefresh();
++};
++
++#endif
+diff --git a/src/App/Osu/OsuOptionsMenu.cpp b/src/App/Osu/OsuOptionsMenu.cpp
+index 8c42c16..24b572c 100644
+--- a/src/App/Osu/OsuOptionsMenu.cpp
++++ b/src/App/Osu/OsuOptionsMenu.cpp
+@@ -50,6 +50,9 @@
+ #include <iostream>
+ #include <fstream>
+ 
++
++static CBaseUITextbox *g_myosuApiTextboxes[3] = {NULL, NULL, NULL}; // myosu
++
+ ConVar osu_options_save_on_back("osu_options_save_on_back", true, FCVAR_NONE);
+ ConVar osu_options_high_quality_sliders("osu_options_high_quality_sliders", false, FCVAR_NONE);
+ ConVar osu_mania_keylayout_wizard("osu_mania_keylayout_wizard");
+@@ -592,6 +595,15 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
+ 	addSubSection("Player (Name)");
+ 	m_nameTextbox = addTextbox(convar->getConVarByName("name")->getString(), convar->getConVarByName("name"));
+ 	addSpacer();
++
++	// myosu: read-only osu! API v2 access (profile picture, rank)
++	addSubSection("Online Rankings (osu! API)", "api key bancho rank avatar profile picture");
++	addLabel("osu.ppy.sh -> Settings -> OAuth -> \"New OAuth Application\"");
++	addLabel("Name: anything (e.g. myosu), Callback URL: leave empty");
++	g_myosuApiTextboxes[0] = addTextbox(convar->getConVarByName("osu_api_username")->getString(), "osu! Username:", convar->getConVarByName("osu_api_username"));
++	g_myosuApiTextboxes[1] = addTextbox(convar->getConVarByName("osu_api_client_id")->getString(), "Client ID:", convar->getConVarByName("osu_api_client_id"));
++	g_myosuApiTextboxes[2] = addTextbox(convar->getConVarByName("osu_api_client_secret")->getString(), "Client Secret:", convar->getConVarByName("osu_api_client_secret"));
++	addSpacer();
+ 	addCheckbox("Include Relax/Autopilot for total weighted pp/acc", "NOTE: osu! does not allow this (since these mods are unranked).\nShould relax/autopilot scores be included in the weighted pp/acc calculation?", convar->getConVarByName("osu_user_include_relax_and_autopilot_for_stats"));
+ 	addCheckbox("Disable osu!lazer star/pp Relax/Autopilot nerfs", "Disabled: osu!lazer algorithm default. Relax/Autopilot scores are nerfed.\nEnabled: McOsu default. All Relax/Autopilot nerfs are disabled.", convar->getConVarByName("osu_stars_and_pp_lazer_relax_autopilot_nerf_disabled"));
+ 	addCheckbox("Show pp instead of score in scorebrowser", "Only McOsu scores and manually imported scores will show pp.\nSee Songbrowser > User Button > Top Ranks > Gear Button > \"Import osu! scores of <NAME>\".", convar->getConVarByName("osu_scores_sort_by_pp"));
+@@ -1442,6 +1454,20 @@ void OsuOptionsMenu::update()
+ {
+ 	OsuScreenBackable::update();
+ 
++	// myosu: write the osu! API textboxes back into their convars
++	{
++		static const char *apiConVarNames[3] = {"osu_api_username", "osu_api_client_id", "osu_api_client_secret"};
++		for (int i=0; i<3; i++)
++		{
++			if (g_myosuApiTextboxes[i] == NULL) continue;
++			ConVar *cvar = convar->getConVarByName(apiConVarNames[i]);
++			UString text = g_myosuApiTextboxes[i]->getText();
++			text = text.trim();
++			if (text != cvar->getString())
++				cvar->setValue(text);
++		}
++	}
++
+ 	// workshop background refresh takes some time, open context menu after loading is finished
+ 	// do this even if options menu is invisible (but only show context menu if visible after finished)
+ 	if (m_bWorkshopSkinSelectScheduled)
+diff --git a/src/App/Osu/OsuUISongBrowserUserButton.cpp b/src/App/Osu/OsuUISongBrowserUserButton.cpp
+index f91cdc4..210f89b 100644
+--- a/src/App/Osu/OsuUISongBrowserUserButton.cpp
++++ b/src/App/Osu/OsuUISongBrowserUserButton.cpp
+@@ -19,6 +19,7 @@
+ #include "OsuTooltipOverlay.h"
+ #include "OsuSongBrowser2.h"
+ #include "OsuDatabase.h"
++#include "OsuBanchoApi.h"
+ 
+ // NOTE: selected username is stored in m_sText
+ 
+@@ -85,10 +86,12 @@ void OsuUISongBrowserUserButton::draw(Graphics *g)
+ 	g->pushClipRect(McRect(m_vPos.x + iconBorder + 1, m_vPos.y + iconBorder + 2, iconWidth, iconHeight));
+ 	g->pushTransform();
+ 	{
+-		const float scale = Osu::getImageScaleToFillResolution(m_osu->getSkin()->getUserIcon(), Vector2(iconWidth, iconHeight));
++		// myosu: Bancho avatar if available
++		Image *userIcon = (OsuBanchoApi::getAvatar() != NULL ? OsuBanchoApi::getAvatar() : m_osu->getSkin()->getUserIcon());
++		const float scale = Osu::getImageScaleToFillResolution(userIcon, Vector2(iconWidth, iconHeight));
+ 		g->scale(scale, scale);
+ 		g->translate(m_vPos.x + iconBorder + iconWidth/2 + 1, m_vPos.y + iconBorder + iconHeight/2 + 1);
+-		g->drawImage(m_osu->getSkin()->getUserIcon());
++		g->drawImage(userIcon);
+ 	}
+ 	g->popTransform();
+ 	g->popClipRect();
+@@ -157,6 +160,21 @@ void OsuUISongBrowserUserButton::draw(Graphics *g)
+ 		{
+ 			UString scoreString = UString::format("LV%i", m_iLevel);
+ 
++			// myosu: Bancho rank next to the level
++			if (OsuBanchoApi::hasProfile())
++			{
++				const OsuBanchoApi::Profile profile = OsuBanchoApi::getProfile();
++				if (profile.globalRank > 0)
++				{
++					std::string rank = std::to_string(profile.globalRank);
++					for (int i = (int)rank.size() - 3; i > 0; i -= 3)
++						rank.insert(i, ".");
++					scoreString.append(UString::format("   #%s", rank.c_str()));
++					if (profile.countryRank > 0)
++						scoreString.append(UString::format(" (%s #%i)", profile.countryCode.toUtf8(), profile.countryRank));
++				}
++			}
++
+ 			const float height = m_vSize.y*0.5f;
+ 			const float paddingTopPercent = (1.0f - scoreScale)*0.25f;
+ 			const float paddingTop = height*paddingTopPercent;
+-- 
+2.43.0
+
