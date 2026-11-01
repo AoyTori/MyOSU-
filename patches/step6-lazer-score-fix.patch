@@ -1,0 +1,56 @@
+From dea3cd0055e7bcffd6786fd35f93e2324c6c1b3b Mon Sep 17 00:00:00 2001
+From: myosu <none>
+Date: Sun, 1 Nov 2026 01:47:14 +0100
+Subject: [PATCH] Global leaderboard: convert lazer-only scores to classic
+ score instead of showing 0
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MvYBfaJwyXivAtVfcZSFtM
+---
+ src/App/Osu/OsuBanchoApi.cpp | 23 ++++++++++++++++++-----
+ 1 file changed, 18 insertions(+), 5 deletions(-)
+
+diff --git a/src/App/Osu/OsuBanchoApi.cpp b/src/App/Osu/OsuBanchoApi.cpp
+index 6f62f4f..9c49a38 100644
+--- a/src/App/Osu/OsuBanchoApi.cpp
++++ b/src/App/Osu/OsuBanchoApi.cpp
+@@ -395,7 +395,7 @@ void leaderboardWorker(std::string clientId, std::string clientSecret, int beatm
+ 	{
+ 		std::string response;
+ 		int status = 0;
+-		ok = httpRequest("osu.ppy.sh", "/api/v2/beatmaps/" + std::to_string(beatmapID) + "/scores?mode=osu&limit=50", L"GET", "", "Authorization: Bearer " + token + "\r\nAccept: application/json", response, status);
++		ok = httpRequest("osu.ppy.sh", "/api/v2/beatmaps/" + std::to_string(beatmapID) + "/scores?mode=osu&limit=50", L"GET", "", "Authorization: Bearer " + token + "\r\nAccept: application/json\r\nx-api-version: 20220705", response, status);
+ 		if (ok && status == 200)
+ 		{
+ 			const size_t scoresPos = findKey(response, 0, "scores");
+@@ -423,10 +423,23 @@ void leaderboardWorker(std::string clientId, std::string clientSecret, int beatm
+ 					else
+ 						sc.num300s = sc.num100s = sc.num50s = sc.numMisses = sc.numGekis = sc.numKatus = 0;
+ 
+-					size_t pos = findKey(response, i, "score");
+-					if (pos == std::string::npos || rawValueAt(response, pos) == "0") pos = findKey(response, i, "legacy_total_score");
+-					if (pos == std::string::npos || rawValueAt(response, pos) == "0") pos = findKey(response, i, "total_score");
+-					sc.score = (pos != std::string::npos ? std::strtoull(rawValueAt(response, pos).c_str(), NULL, 10) : 0);
++					// score: stable scores have a legacy (classic) total; lazer-only scores get converted to classic
++					size_t pos = findKey(response, i, "legacy_total_score");
++					unsigned long long legacyScore = (pos != std::string::npos ? std::strtoull(rawValueAt(response, pos).c_str(), NULL, 10) : 0);
++					if (legacyScore == 0)
++					{
++						pos = findKey(response, i, "score");
++						if (pos != std::string::npos) legacyScore = std::strtoull(rawValueAt(response, pos).c_str(), NULL, 10);
++					}
++					if (legacyScore > 0)
++						sc.score = legacyScore;
++					else
++					{
++						pos = findKey(response, i, "total_score");
++						const double standardised = (pos != std::string::npos ? std::atof(rawValueAt(response, pos).c_str()) : 0.0);
++						const double objectCount = (double)(sc.num300s + sc.num100s + sc.num50s + sc.numMisses);
++						sc.score = (unsigned long long)std::round(((objectCount*objectCount*32.57 + 100000.0) * standardised) / 1000000.0);
++					}
+ 
+ 					sc.comboMax = intField(response, i, "max_combo");
+ 					pos = findKey(response, i, "perfect");
+-- 
+2.43.0
+
