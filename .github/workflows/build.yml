@@ -25,7 +25,16 @@ jobs:
           git clone --depth 1 https://github.com/McKay42/McEngine.git
           git clone --depth 1 https://github.com/McKay42/McOsu.git
           cd McOsu
-          for p in ../patches/*.patch; do tr -d '\r' < "$p" > /tmp/fix.patch; git apply --whitespace=nowarn /tmp/fix.patch; done
+          if [ -f ../patches/myosu-all.patch ]; then
+            PATCHES="../patches/myosu-all.patch"   # one file with everything, the other patch files are ignored
+          else
+            PATCHES=$(ls ../patches/*.patch)
+          fi
+          for p in $PATCHES; do
+            echo "Patch: $p"
+            tr -d '\r' < "$p" > /tmp/fix.patch
+            git apply --whitespace=nowarn /tmp/fix.patch || { echo "===== PATCH FEHLGESCHLAGEN: $p ====="; exit 1; }
+          done
           cd ..
           cp -r McOsu/src/App/Osu McEngine/McEngine/src/App/Osu
           E=McEngine/McEngine/src/Engine/Engine.cpp
