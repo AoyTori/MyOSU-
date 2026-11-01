@@ -1,0 +1,423 @@
+From ddb1ccd4cf8e6ab30c80016046da7f4060ef9797 Mon Sep 17 00:00:00 2001
+From: myosu <none>
+Date: Sun, 1 Nov 2026 16:04:55 +0100
+Subject: [PATCH] Aoy mode: play with CS0/1.5, AR10.3, OD10/11 but keep normal
+ stars/pp, switchable
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MvYBfaJwyXivAtVfcZSFtM
+---
+ src/App/Osu/Osu.cpp                |   2 +
+ src/App/Osu/OsuAoyMode.cpp         | 178 +++++++++++++++++++++++++++++
+ src/App/Osu/OsuAoyMode.h           |  45 ++++++++
+ src/App/Osu/OsuBeatmap.cpp         |  13 +++
+ src/App/Osu/OsuBeatmapStandard.cpp |  43 +++++--
+ src/App/Osu/OsuOptionsMenu.cpp     |   1 +
+ 6 files changed, 275 insertions(+), 7 deletions(-)
+ create mode 100644 src/App/Osu/OsuAoyMode.cpp
+ create mode 100644 src/App/Osu/OsuAoyMode.h
+
+diff --git a/src/App/Osu/Osu.cpp b/src/App/Osu/Osu.cpp
+index a0a356d..d97a989 100644
+--- a/src/App/Osu/Osu.cpp
++++ b/src/App/Osu/Osu.cpp
+@@ -41,6 +41,7 @@
+ #include "OsuUpdateHandler.h"
+ #include "OsuBanchoApi.h"
+ #include "OsuRelaxOverlay.h"
++#include "OsuAoyMode.h"
+ #include "OsuNotificationOverlay.h"
+ #include "OsuTooltipOverlay.h"
+ #include "OsuGameRules.h"
+@@ -875,6 +876,7 @@ void Osu::update()
+ 
+ 	OsuBanchoApi::update(); // myosu: Bancho profile (avatar, rank)
+ 	OsuRelaxOverlay::update(this); // myosu: release the Relax key overlay clicks
++	OsuAoyMode::update(this); // myosu: switch Aoy plays when the mode gets toggled
+ 
+ 	if (m_skin != NULL)
+ 		m_skin->update();
+diff --git a/src/App/Osu/OsuAoyMode.cpp b/src/App/Osu/OsuAoyMode.cpp
+new file mode 100644
+index 0000000..f525d5f
+--- /dev/null
++++ b/src/App/Osu/OsuAoyMode.cpp
+@@ -0,0 +1,178 @@
++//================ myosu: Aoy mode ================//
++//
++// Purpose:		while playing: CS 0 (HR: 1.5), AR 10.3, OD 10 (HR: 11).
++//				Displayed values, stars and pp stay the normal ones of the map
++//				(nomod or HR), as if it was played normally.
++//				Every Aoy play also remembers its "real" values, so turning the
++//				mode off switches those scores back to the real pp (and on again).
++//
++//===============================================================================//
++
++#include "OsuAoyMode.h"
++
++#include "Engine.h"
++#include "ConVar.h"
++
++#include "Osu.h"
++#include "OsuSongBrowser2.h"
++#include "OsuDatabase.h"
++
++#include <fstream>
++#include <sstream>
++#include <vector>
++#include <cstdlib>
++
++ConVar osu_aoy_mode("osu_aoy_mode", false, FCVAR_NONE, "Aoy mode: play with CS 0 (HR 1.5), AR 10.3, OD 10 (HR 11) but get the normal stars/pp of the map");
++ConVar osu_aoy_cs("osu_aoy_cs", 0.0f, FCVAR_NONE, "Aoy mode CS (nomod)");
++ConVar osu_aoy_cs_hr("osu_aoy_cs_hr", 1.5f, FCVAR_NONE, "Aoy mode CS with HR");
++ConVar osu_aoy_ar("osu_aoy_ar", 10.3f, FCVAR_NONE, "Aoy mode AR");
++ConVar osu_aoy_od("osu_aoy_od", 10.0f, FCVAR_NONE, "Aoy mode OD (nomod)");
++ConVar osu_aoy_od_hr("osu_aoy_od_hr", 11.0f, FCVAR_NONE, "Aoy mode OD with HR");
++
++namespace
++{
++	const char *FILE_NAME = "myosu_aoy_scores.txt";
++
++	struct Entry
++	{
++		std::string md5;
++		unsigned long long timestamp = 0;
++		std::string playerName;
++		OsuAoyMode::Values normal;
++		OsuAoyMode::Values real;
++	};
++
++	int g_iAppliedState = -1; // -1 = nothing applied yet this session
++
++	void writeValues(std::ostream &out, const OsuAoyMode::Values &v)
++	{
++		out << v.pp << "\t" << v.stars << "\t" << v.aim << "\t" << v.speed << "\t" << v.CS << "\t" << v.AR << "\t" << v.OD;
++	}
++
++	bool readValues(std::istringstream &in, OsuAoyMode::Values &v)
++	{
++		std::string field;
++		double values[7];
++		for (int i=0; i<7; i++)
++		{
++			if (!std::getline(in, field, '\t')) return false;
++			values[i] = std::atof(field.c_str());
++		}
++		v.pp = (float)values[0];
++		v.stars = values[1];
++		v.aim = values[2];
++		v.speed = values[3];
++		v.CS = (float)values[4];
++		v.AR = (float)values[5];
++		v.OD = (float)values[6];
++		return true;
++	}
++
++	std::vector<Entry> loadEntries()
++	{
++		std::vector<Entry> entries;
++		std::ifstream file(FILE_NAME);
++		std::string line;
++		while (std::getline(file, line))
++		{
++			if (line.empty() || line[0] == '#') continue;
++			std::istringstream in(line);
++			Entry e;
++			std::string field;
++			if (!std::getline(in, e.md5, '\t')) continue;
++			if (!std::getline(in, field, '\t')) continue;
++			e.timestamp = std::strtoull(field.c_str(), NULL, 10);
++			if (!readValues(in, e.normal)) continue;
++			if (!readValues(in, e.real)) continue;
++			std::getline(in, e.playerName); // rest of the line (names may contain spaces)
++			entries.push_back(e);
++		}
++		return entries;
++	}
++
++	void applyValues(OsuDatabase::Score &score, const OsuAoyMode::Values &v)
++	{
++		score.pp = v.pp;
++		score.starsTomTotal = (float)v.stars;
++		score.starsTomAim = (float)v.aim;
++		score.starsTomSpeed = (float)v.speed;
++		score.CS = v.CS;
++		score.AR = v.AR;
++		score.OD = v.OD;
++	}
++}
++
++bool OsuAoyMode::isActive()
++{
++	return osu_aoy_mode.getBool();
++}
++
++float OsuAoyMode::getCS(bool hardRock)
++{
++	return (hardRock ? osu_aoy_cs_hr.getFloat() : osu_aoy_cs.getFloat());
++}
++
++float OsuAoyMode::getAR()
++{
++	return osu_aoy_ar.getFloat();
++}
++
++float OsuAoyMode::getOD(bool hardRock)
++{
++	return (hardRock ? osu_aoy_od_hr.getFloat() : osu_aoy_od.getFloat());
++}
++
++void OsuAoyMode::recordScore(const std::string &md5, unsigned long long unixTimestamp, const std::string &playerName, const Values &normal, const Values &real)
++{
++	std::ofstream out(FILE_NAME, std::ios::app);
++	if (!out.good()) return;
++	out << md5 << "\t" << unixTimestamp << "\t";
++	writeValues(out, normal);
++	out << "\t";
++	writeValues(out, real);
++	out << "\t" << playerName << "\n";
++}
++
++void OsuAoyMode::update(Osu *osu)
++{
++	if (osu == NULL || osu->getSongBrowser() == NULL) return;
++
++	OsuDatabase *db = osu->getSongBrowser()->getDatabase();
++	if (db == NULL || !db->isFinished()) return;
++
++	const int state = (osu_aoy_mode.getBool() ? 1 : 0);
++
++	// first frame after loading: the database already holds whatever was saved last time
++	if (g_iAppliedState < 0)
++	{
++		g_iAppliedState = state;
++		return;
++	}
++	if (state == g_iAppliedState) return;
++	g_iAppliedState = state;
++
++	// switch every remembered Aoy play to the normal (on) or real (off) values
++	const std::vector<Entry> entries = loadEntries();
++	if (entries.empty()) return;
++
++	std::unordered_map<std::string, std::vector<OsuDatabase::Score>> *scores = db->getScores();
++	int changed = 0;
++	for (const Entry &e : entries)
++	{
++		std::unordered_map<std::string, std::vector<OsuDatabase::Score>>::iterator it = scores->find(e.md5);
++		if (it == scores->end()) continue;
++
++		for (OsuDatabase::Score &score : it->second)
++		{
++			if (score.unixTimestamp != e.timestamp || std::string(score.playerName.toUtf8()) != e.playerName) continue;
++			applyValues(score, state == 1 ? e.normal : e.real);
++			changed++;
++		}
++	}
++
++	if (changed > 0)
++	{
++		db->forceScoreUpdateOnNextCalculatePlayerStats();
++		db->forceScoresSaveOnNextShutdown();
++	}
++}
+diff --git a/src/App/Osu/OsuAoyMode.h b/src/App/Osu/OsuAoyMode.h
+new file mode 100644
+index 0000000..a5a8ea0
+--- /dev/null
++++ b/src/App/Osu/OsuAoyMode.h
+@@ -0,0 +1,45 @@
++//================ myosu: Aoy mode ================//
++//
++// Purpose:		while playing: CS 0 (HR: 1.5), AR 10.3, OD 10 (HR: 11).
++//				Displayed values, stars and pp stay the normal ones of the map
++//				(nomod or HR), as if it was played normally.
++//				Every Aoy play also remembers its "real" values, so turning the
++//				mode off switches those scores back to the real pp (and on again).
++//
++//===============================================================================//
++
++#ifndef OSUAOYMODE_H
++#define OSUAOYMODE_H
++
++#include <string>
++
++class Osu;
++
++namespace OsuAoyMode
++{
++	struct Values
++	{
++		float pp = 0.0f;
++		double stars = 0.0;
++		double aim = 0.0;
++		double speed = 0.0;
++		float CS = 0.0f;
++		float AR = 0.0f;
++		float OD = 0.0f;
++	};
++
++	bool isActive();
++
++	// gameplay values (only used while playing)
++	float getCS(bool hardRock);
++	float getAR();
++	float getOD(bool hardRock);
++
++	// remembers both versions of a freshly saved Aoy play
++	void recordScore(const std::string &md5, unsigned long long unixTimestamp, const std::string &playerName, const Values &normal, const Values &real);
++
++	// switches the remembered plays when the mode gets toggled, call every frame
++	void update(Osu *osu);
++}
++
++#endif
+diff --git a/src/App/Osu/OsuBeatmap.cpp b/src/App/Osu/OsuBeatmap.cpp
+index 33ca3c7..132f78b 100644
+--- a/src/App/Osu/OsuBeatmap.cpp
++++ b/src/App/Osu/OsuBeatmap.cpp
+@@ -26,6 +26,7 @@
+ #include "OsuBackgroundImageHandler.h"
+ #include "OsuPauseMenu.h"
+ #include "OsuGameRules.h"
++#include "OsuAoyMode.h"
+ #include "OsuNotificationOverlay.h"
+ #include "OsuModSelector.h"
+ #include "OsuMainMenu.h"
+@@ -1889,6 +1890,10 @@ float OsuBeatmap::getAR(bool useAudioLibrarySpeedMultiplierForOverrideLockCalcul
+ 		if (osu_ar_overridenegative.getFloat() < 0.0f)
+ 			AR = osu_ar_overridenegative.getFloat();
+ 
++		// myosu: Aoy mode (only while playing, the song browser shows the normal values)
++		if (OsuAoyMode::isActive() && m_osu->isInPlayMode())
++			AR = OsuAoyMode::getAR();
++
+ 		if (osu_ar_override_lock.getBool())
+ 			AR = OsuGameRules::getRawConstantApproachRateForSpeedMultiplier(OsuGameRules::getRawApproachTime(AR), (m_music != NULL && m_bIsPlaying && useAudioLibrarySpeedMultiplierForOverrideLockCalculationsIfPlaying ? getSpeedMultiplier() : m_osu->getSpeedMultiplier()));
+ 
+@@ -1916,6 +1921,10 @@ float OsuBeatmap::getCS() const
+ 		if (osu_cs_overridenegative.getFloat() < 0.0f)
+ 			CS = osu_cs_overridenegative.getFloat();
+ 
++		// myosu: Aoy mode (only while playing)
++		if (OsuAoyMode::isActive() && m_osu->isInPlayMode())
++			CS = OsuAoyMode::getCS(m_osu->getModHR());
++
+ 		if (osu_mod_minimize.getBool() && m_hitobjects.size() > 0)
+ 		{
+ 			if (m_hitobjects.size() > 0)
+@@ -1955,6 +1964,10 @@ float OsuBeatmap::getOD(bool useAudioLibrarySpeedMultiplierForOverrideLockCalcul
+ 	if (osu_od_override.getFloat() >= 0.0f)
+ 		OD = osu_od_override.getFloat();
+ 
++	// myosu: Aoy mode (only while playing)
++	if (OsuAoyMode::isActive() && m_osu->isInPlayMode())
++		OD = OsuAoyMode::getOD(m_osu->getModHR());
++
+ 	if (osu_od_override_lock.getBool())
+ 		OD = OsuGameRules::getRawConstantOverallDifficultyForSpeedMultiplier(OsuGameRules::getRawHitWindow300(OD), (m_music != NULL && m_bIsPlaying && useAudioLibrarySpeedMultiplierForOverrideLockCalculationsIfPlaying ? getSpeedMultiplier() : m_osu->getSpeedMultiplier()));
+ 
+diff --git a/src/App/Osu/OsuBeatmapStandard.cpp b/src/App/Osu/OsuBeatmapStandard.cpp
+index 2a1a651..f30589d 100644
+--- a/src/App/Osu/OsuBeatmapStandard.cpp
++++ b/src/App/Osu/OsuBeatmapStandard.cpp
+@@ -39,6 +39,7 @@
+ #include <string.h>
+ #include <sstream>
+ #include "OsuResultStats.h"
++#include "OsuAoyMode.h"
+ 
+ #include <cctype>
+ #include <algorithm>
+@@ -1631,8 +1632,8 @@ void OsuBeatmapStandard::onBeforeStop(bool quit)
+ 		// calculate stars
+ 		const UString &osuFilePath = m_selectedDifficulty2->getFilePath();
+ 		const Osu::GAMEMODE gameMode = Osu::GAMEMODE::STD;
+-		const float AR = getAR(false);
+-		const float CS = getCS();
++		float AR = getAR(false);
++		float CS = getCS();
+ 		const float speedMultiplier = m_osu->getSpeedMultiplier(); // NOTE: not this->getSpeedMultiplier()!
+ 
+ 		OsuDatabaseBeatmap::LOAD_DIFFOBJ_RESULT diffres = OsuDatabaseBeatmap::loadDifficultyHitObjects(osuFilePath, gameMode, AR, CS, speedMultiplier);
+@@ -1641,9 +1642,7 @@ void OsuBeatmapStandard::onBeforeStop(bool quit)
+ 		OsuDifficultyCalculator::BeatmapDiffcalcData beatmapData(this, diffres.diffobjects);
+ 		OsuDifficultyCalculator::DifficultyAttributes attributes{};
+ 
+-		const double totalStars = OsuDifficultyCalculator::calculateDifficultyAttributes(attributes, beatmapData);
+-
+-		m_difficultyAttributes = attributes;
++		double totalStars = OsuDifficultyCalculator::calculateDifficultyAttributes(attributes, beatmapData);
+ 
+ 		const int numHitObjects = m_hitobjects.size();
+ 		const int numCircles = m_selectedDifficulty2->getNumCircles();
+@@ -1656,7 +1655,35 @@ void OsuBeatmapStandard::onBeforeStop(bool quit)
+ 		const int num100s = m_osu->getScore()->getNum100s();
+ 		const int num50s = m_osu->getScore()->getNum50s();
+ 		const unsigned long legacyTotalScore = m_osu->getScore()->getScore();
+-		const float pp = OsuDifficultyCalculator::calculatePPv2(m_osu, this, attributes, numHitObjects, numCircles, numSliders, numSpinners, maxPossibleCombo, highestCombo, numMisses, num300s, num100s, num50s, legacyTotalScore);
++		float pp = OsuDifficultyCalculator::calculatePPv2(m_osu, this, attributes, numHitObjects, numCircles, numSliders, numSpinners, maxPossibleCombo, highestCombo, numMisses, num300s, num100s, num50s, legacyTotalScore);
++
++		// myosu: Aoy mode -> stars/pp/values as if the map was played with its normal (nomod/HR) settings
++		const bool aoyUsed = OsuAoyMode::isActive();
++		OsuAoyMode::Values aoyReal, aoyNormal;
++		float savedOD = getOD(false);
++		aoyReal.pp = pp; aoyReal.stars = totalStars; aoyReal.aim = attributes.AimDifficulty; aoyReal.speed = attributes.SpeedDifficulty;
++		aoyReal.CS = CS; aoyReal.AR = AR; aoyReal.OD = savedOD;
++		if (aoyUsed)
++		{
++			const float normalCS = clamp<float>(m_selectedDifficulty2->getCS() * m_osu->getCSDifficultyMultiplier(), 0.0f, 10.0f);
++			const float normalAR = getRawAR();
++			const float normalOD = getRawOD();
++
++			OsuDatabaseBeatmap::LOAD_DIFFOBJ_RESULT diffresNormal = OsuDatabaseBeatmap::loadDifficultyHitObjects(osuFilePath, gameMode, normalAR, normalCS, speedMultiplier);
++			OsuDifficultyCalculator::BeatmapDiffcalcData beatmapDataNormal(this, diffresNormal.diffobjects);
++			OsuDifficultyCalculator::DifficultyAttributes attributesNormal{};
++			totalStars = OsuDifficultyCalculator::calculateDifficultyAttributes(attributesNormal, beatmapDataNormal);
++			attributes = attributesNormal;
++			pp = OsuDifficultyCalculator::calculatePPv2(false, OsuScore::VERSION, m_osu->getScore()->getModsLegacy(), speedMultiplier, normalAR, normalOD, attributes, numHitObjects, numCircles, numSliders, numSpinners, maxPossibleCombo, highestCombo, numMisses, num300s, num100s, num50s, legacyTotalScore);
++
++			CS = normalCS;
++			AR = normalAR;
++			savedOD = normalOD;
++		}
++		aoyNormal.pp = pp; aoyNormal.stars = totalStars; aoyNormal.aim = attributes.AimDifficulty; aoyNormal.speed = attributes.SpeedDifficulty;
++		aoyNormal.CS = CS; aoyNormal.AR = AR; aoyNormal.OD = savedOD;
++
++		m_difficultyAttributes = attributes;
+ 		m_osu->getScore()->setStarsTomTotal(totalStars);
+ 		m_osu->getScore()->setStarsTomAim(attributes.AimDifficulty);
+ 		m_osu->getScore()->setStarsTomSpeed(attributes.SpeedDifficulty);
+@@ -1715,7 +1742,7 @@ void OsuBeatmapStandard::onBeforeStop(bool quit)
+ 				score.speedMultiplier = m_osu->getSpeedMultiplier();
+ 				score.CS = CS;
+ 				score.AR = AR;
+-				score.OD = getOD(false);
++				score.OD = savedOD;
+ 				score.HP = getHP();
+ 
+ 				//if (scoreVersion > 20180722)
+@@ -1741,6 +1768,8 @@ void OsuBeatmapStandard::onBeforeStop(bool quit)
+ 				OsuResultStats::captureBefore(m_osu); // myosu: result screen table
+ 				scoreIndex = m_osu->getSongBrowser()->getDatabase()->addScore(m_selectedDifficulty2->getMD5Hash(), score);
+ 				OsuResultStats::captureAfter(m_osu, score, scoreIndex, m_selectedDifficulty2->getID());
++				if (aoyUsed && scoreIndex >= 0)
++					OsuAoyMode::recordScore(score.md5hash, score.unixTimestamp, std::string(score.playerName.toUtf8()), aoyNormal, aoyReal);
+ 				if (scoreIndex == -1)
+ 					m_osu->getNotificationOverlay()->addNotification(UString::format("Failed saving score! md5hash.length() = %i", m_selectedDifficulty2->getMD5Hash().length()), 0xffff0000, false, 3.0f);
+ 			}
+diff --git a/src/App/Osu/OsuOptionsMenu.cpp b/src/App/Osu/OsuOptionsMenu.cpp
+index 9423209..39eca6f 100644
+--- a/src/App/Osu/OsuOptionsMenu.cpp
++++ b/src/App/Osu/OsuOptionsMenu.cpp
+@@ -1062,6 +1062,7 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
+ 	addCheckbox("Show approach circle on first \"Hidden\" object", convar->getConVarByName("osu_show_approach_circle_on_first_hidden_object"));
+ 	addCheckbox("SuddenDeath restart on miss", "Skips the failing animation, and instantly restarts like SS/PF.", convar->getConVarByName("osu_mod_suddendeath_restart"));
+ 	addCheckbox("Relax", "Play with Relax (no clicking needed) as a permanent option.\nIt is not a mod, and \"Reset All Mods\" won't turn it off.", convar->getConVarByName("osu_relax_option"));
++	addCheckbox("Aoy mode", "While playing: CS 0 (HR 1.5), AR 10.3, OD 10 (HR 11).\nShown values, stars and pp stay the normal ones of the map.\nTurning it off switches your Aoy plays back to their real pp.", convar->getConVarByName("osu_aoy_mode"));
+ 	addCheckbox("Relax: block my K1/K2 during gameplay", "Your own key presses are ignored while playing with Relax (still work in breaks, intro and pause).", convar->getConVarByName("osu_relax_block_keys"));
+ 	addCheckbox("Relax: show auto clicks in key overlay", "Like lazer: the key overlay presses along when Relax hits a note.", convar->getConVarByName("osu_relax_overlay_autoclick"));
+ 	{
+-- 
+2.43.0
+
