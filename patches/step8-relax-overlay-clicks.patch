@@ -1,0 +1,217 @@
+From d0cd5b78862c02db82552d79dee3f86a66efe799 Mon Sep 17 00:00:00 2001
+From: myosu <none>
+Date: Sun, 1 Nov 2026 02:06:55 +0100
+Subject: [PATCH] Relax: lazer-style auto clicks in the key overlay, single tap
+ below a notes/sec threshold
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MvYBfaJwyXivAtVfcZSFtM
+---
+ src/App/Osu/Osu.cpp             |  2 +
+ src/App/Osu/OsuCircle.cpp       |  4 ++
+ src/App/Osu/OsuOptionsMenu.cpp  |  6 +++
+ src/App/Osu/OsuRelaxOverlay.cpp | 81 +++++++++++++++++++++++++++++++++
+ src/App/Osu/OsuRelaxOverlay.h   | 21 +++++++++
+ src/App/Osu/OsuSlider.cpp       |  4 ++
+ 6 files changed, 118 insertions(+)
+ create mode 100644 src/App/Osu/OsuRelaxOverlay.cpp
+ create mode 100644 src/App/Osu/OsuRelaxOverlay.h
+
+diff --git a/src/App/Osu/Osu.cpp b/src/App/Osu/Osu.cpp
+index 850f6ab..a0a356d 100644
+--- a/src/App/Osu/Osu.cpp
++++ b/src/App/Osu/Osu.cpp
+@@ -40,6 +40,7 @@
+ #include "OsuKeyBindings.h"
+ #include "OsuUpdateHandler.h"
+ #include "OsuBanchoApi.h"
++#include "OsuRelaxOverlay.h"
+ #include "OsuNotificationOverlay.h"
+ #include "OsuTooltipOverlay.h"
+ #include "OsuGameRules.h"
+@@ -873,6 +874,7 @@ void Osu::update()
+ 	const int wheelDelta = engine->getMouse()->getWheelDeltaVertical(); // HACKHACK: songbrowser focus
+ 
+ 	OsuBanchoApi::update(); // myosu: Bancho profile (avatar, rank)
++	OsuRelaxOverlay::update(this); // myosu: release the Relax key overlay clicks
+ 
+ 	if (m_skin != NULL)
+ 		m_skin->update();
+diff --git a/src/App/Osu/OsuCircle.cpp b/src/App/Osu/OsuCircle.cpp
+index 2332e79..5bf4430 100644
+--- a/src/App/Osu/OsuCircle.cpp
++++ b/src/App/Osu/OsuCircle.cpp
+@@ -21,6 +21,7 @@
+ #include "OsuSkin.h"
+ #include "OsuSkinImage.h"
+ #include "OsuGameRules.h"
++#include "OsuRelaxOverlay.h"
+ #include "OsuBeatmapStandard.h"
+ #include "OsuModFPoSu.h"
+ 
+@@ -950,6 +951,9 @@ void OsuCircle::update(long curPos)
+ 
+ 						if (result != OsuScore::HIT::HIT_NULL)
+ 						{
++							if (m_beatmap->getOsu()->getModRelax())
++								OsuRelaxOverlay::onAutoClick(m_beatmap->getOsu(), m_iTime, 0); // myosu
++
+ 							const float targetDelta = cursorDelta / (m_beatmap->getHitcircleDiameter()/2.0f);
+ 							const float targetAngle = rad2deg(atan2(m_beatmap->getCursorPos().y - pos.y, m_beatmap->getCursorPos().x - pos.x));
+ 
+diff --git a/src/App/Osu/OsuOptionsMenu.cpp b/src/App/Osu/OsuOptionsMenu.cpp
+index f226374..b648916 100644
+--- a/src/App/Osu/OsuOptionsMenu.cpp
++++ b/src/App/Osu/OsuOptionsMenu.cpp
+@@ -1046,6 +1046,12 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
+ 	addCheckbox("Show approach circle on first \"Hidden\" object", convar->getConVarByName("osu_show_approach_circle_on_first_hidden_object"));
+ 	addCheckbox("SuddenDeath restart on miss", "Skips the failing animation, and instantly restarts like SS/PF.", convar->getConVarByName("osu_mod_suddendeath_restart"));
+ 	addCheckbox("Relax", "Play with Relax (no clicking needed) as a permanent option.\nIt is not a mod, and \"Reset All Mods\" won't turn it off.", convar->getConVarByName("osu_relax_option"));
++	addCheckbox("Relax: show auto clicks in key overlay", "Like lazer: the key overlay presses along when Relax hits a note.", convar->getConVarByName("osu_relax_overlay_autoclick"));
++	{
++		CBaseUISlider *npsSlider = addSlider("Alternate K1/K2 from notes/sec:", 1.0f, 20.0f, convar->getConVarByName("osu_relax_overlay_alternate_nps"));
++		npsSlider->setChangeCallback( fastdelegate::MakeDelegate(this, &OsuOptionsMenu::onSliderChangeInt) );
++		npsSlider->setKeyDelta(1);
++	}
+ 	addCheckbox("Hide Relax indicator", "Never show Relax in mod icons, score lists or Discord status.", convar->getConVarByName("osu_relax_hide_indicator"));
+ 	addCheckbox("Show Skip Button during Intro", "Skip intro to first hitobject.", convar->getConVarByName("osu_skip_intro_enabled"));
+ 	addCheckbox("Show Skip Button during Breaks", "Skip breaks in the middle of beatmaps.", convar->getConVarByName("osu_skip_breaks_enabled"));
+diff --git a/src/App/Osu/OsuRelaxOverlay.cpp b/src/App/Osu/OsuRelaxOverlay.cpp
+new file mode 100644
+index 0000000..f2a3f57
+--- /dev/null
++++ b/src/App/Osu/OsuRelaxOverlay.cpp
+@@ -0,0 +1,81 @@
++//================ myosu: lazer-style key overlay for Relax ================//
++//
++// Purpose:		with Relax, the key overlay shows the automatic clicks.
++//				Below a notes-per-second threshold only K1 is used (single tap),
++//				above it the clicks alternate between K1 and K2.
++//				Purely visual, nothing is sent to the system.
++//
++//===============================================================================//
++
++#include "OsuRelaxOverlay.h"
++
++#include "Engine.h"
++#include "ConVar.h"
++
++#include "Osu.h"
++#include "OsuHUD.h"
++#include "OsuScore.h"
++
++ConVar osu_relax_overlay_autoclick("osu_relax_overlay_autoclick", true, FCVAR_NONE, "with Relax, show the automatic clicks in the key overlay (like lazer)");
++ConVar osu_relax_overlay_alternate_nps("osu_relax_overlay_alternate_nps", 5.0f, FCVAR_NONE, "notes per second from which the Relax key overlay alternates K1/K2 (below: single tap K1)");
++
++namespace
++{
++	long g_lastClickTime = -1;
++	int g_lastKey = 2;
++	bool g_keyDown[2] = {false, false};
++	double g_releaseAt[2] = {0.0, 0.0};
++
++	void release(Osu *osu, int key)
++	{
++		if (!g_keyDown[key-1]) return;
++		g_keyDown[key-1] = false;
++		osu->getHUD()->animateInputoverlay(key, false);
++	}
++}
++
++void OsuRelaxOverlay::onAutoClick(Osu *osu, long hitTimeMS, long holdDurationMS)
++{
++	if (osu == NULL || !osu_relax_overlay_autoclick.getBool()) return;
++
++	// new attempt / seeking backwards
++	if (g_lastClickTime < 0 || hitTimeMS < g_lastClickTime)
++	{
++		g_lastClickTime = -1;
++		g_lastKey = 2;
++	}
++
++	// single tap below the threshold, alternate above it
++	const float nps = osu_relax_overlay_alternate_nps.getFloat();
++	const long interval = (g_lastClickTime >= 0 ? hitTimeMS - g_lastClickTime : 100000);
++	const bool alternate = (nps > 0.0f && interval > 0 && interval <= (long)(1000.0f / nps));
++	const int key = (alternate ? (g_lastKey == 1 ? 2 : 1) : 1);
++
++	release(osu, key); // in case it is still held from the previous note
++
++	g_keyDown[key-1] = true;
++	osu->getHUD()->animateInputoverlay(key, true);
++	osu->getScore()->addKeyCount(key);
++
++	// hold: sliders for their duration, circles briefly (shorter for fast notes)
++	float speed = osu->getSpeedMultiplier();
++	if (speed <= 0.0f) speed = 1.0f;
++	long holdMS = (holdDurationMS > 0 ? holdDurationMS : 60);
++	if (holdDurationMS <= 0 && interval < 120)
++		holdMS = (interval/2 > 15 ? interval/2 : 15);
++	g_releaseAt[key-1] = engine->getTime() + (holdMS / 1000.0) / speed;
++
++	g_lastClickTime = hitTimeMS;
++	g_lastKey = key;
++}
++
++void OsuRelaxOverlay::update(Osu *osu)
++{
++	if (osu == NULL) return;
++
++	for (int key=1; key<=2; key++)
++	{
++		if (g_keyDown[key-1] && engine->getTime() >= g_releaseAt[key-1])
++			release(osu, key);
++	}
++}
+diff --git a/src/App/Osu/OsuRelaxOverlay.h b/src/App/Osu/OsuRelaxOverlay.h
+new file mode 100644
+index 0000000..b46ea5a
+--- /dev/null
++++ b/src/App/Osu/OsuRelaxOverlay.h
+@@ -0,0 +1,21 @@
++//================ myosu: lazer-style key overlay for Relax ================//
++//
++// Purpose:		with Relax, the key overlay shows the automatic clicks.
++//				Below a notes-per-second threshold only K1 is used (single tap),
++//				above it the clicks alternate between K1 and K2.
++//				Purely visual, nothing is sent to the system.
++//
++//===============================================================================//
++
++#ifndef OSURELAXOVERLAY_H
++#define OSURELAXOVERLAY_H
++
++class Osu;
++
++namespace OsuRelaxOverlay
++{
++	void onAutoClick(Osu *osu, long hitTimeMS, long holdDurationMS); // called when Relax hits a circle/slider head
++	void update(Osu *osu); // releases the overlay keys again, call every frame
++}
++
++#endif
+diff --git a/src/App/Osu/OsuSlider.cpp b/src/App/Osu/OsuSlider.cpp
+index 125d472..a5b8969 100644
+--- a/src/App/Osu/OsuSlider.cpp
++++ b/src/App/Osu/OsuSlider.cpp
+@@ -27,6 +27,7 @@
+ #include "OsuSkin.h"
+ #include "OsuSkinImage.h"
+ #include "OsuGameRules.h"
++#include "OsuRelaxOverlay.h"
+ #include "OsuSliderRenderer.h"
+ #include "OsuBeatmapStandard.h"
+ #include "OsuModFPoSu.h"
+@@ -1582,6 +1583,9 @@ void OsuSlider::update(long curPos)
+ 
+ 						if (result != OsuScore::HIT::HIT_NULL)
+ 						{
++							if (m_beatmap->getOsu()->getModRelax())
++								OsuRelaxOverlay::onAutoClick(m_beatmap->getOsu(), m_iTime, getDuration()); // myosu
++
+ 							const float targetDelta = cursorDelta / (m_beatmap->getHitcircleDiameter()/2.0f);
+ 							const float targetAngle = rad2deg(atan2(m_beatmap->getCursorPos().y - pos.y, m_beatmap->getCursorPos().x - pos.x));
+ 
+-- 
+2.43.0
+
