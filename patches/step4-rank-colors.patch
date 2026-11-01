@@ -1,0 +1,86 @@
+From c962f637ab36d6e0a1a68eb386971c9dcf087a90 Mon Sep 17 00:00:00 2001
+From: myosu <none>
+Date: Sun, 1 Nov 2026 01:23:46 +0100
+Subject: [PATCH] Bigger global rank below the country rank, colored by tier
+ (rainbow for #1)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MvYBfaJwyXivAtVfcZSFtM
+---
+ src/App/Osu/OsuUISongBrowserUserButton.cpp | 46 ++++++++++++++++------
+ 1 file changed, 35 insertions(+), 11 deletions(-)
+
+diff --git a/src/App/Osu/OsuUISongBrowserUserButton.cpp b/src/App/Osu/OsuUISongBrowserUserButton.cpp
+index 6fba95c..209dbfa 100644
+--- a/src/App/Osu/OsuUISongBrowserUserButton.cpp
++++ b/src/App/Osu/OsuUISongBrowserUserButton.cpp
+@@ -21,6 +21,8 @@
+ #include "OsuDatabase.h"
+ #include "OsuBanchoApi.h"
+ 
++#include <cmath>
++
+ // NOTE: selected username is stored in m_sText
+ 
+ ConVar osu_user_draw_pp("osu_user_draw_pp", true, FCVAR_NONE);
+@@ -211,24 +213,46 @@ void OsuUISongBrowserUserButton::draw(Graphics *g)
+ 					g->popTransform();
+ 				}
+ 
+-				// big global rank, centered in the free space between the name and the country rank
++				// big global rank, right-aligned below the country rank, colored by tier
+ 				McFont *bigFont = m_osu->getSongBrowserFont();
+-				const float nameScale = ((m_vSize.y*0.5f) / bigFont->getHeight())*0.5f;
+-				const float nameEnd = m_vPos.x + iconWidth + usernamePaddingLeft + bigFont->getStringWidth(m_sText)*nameScale;
+ 				const UString bigString = UString::format("#%s", formatRank(globalRank).c_str());
+-				const float bigScale = nameScale*1.15f;
++				const float bigScale = ((m_vSize.y*0.5f) / bigFont->getHeight())*0.75f;
+ 				const float bigWidth = bigFont->getStringWidth(bigString)*bigScale;
+-				const float gap = m_vSize.y*0.1f;
+-				const float areaStart = nameEnd + gap;
+-				const float areaEnd = countryStart - gap;
+-				float x = areaStart + (areaEnd - areaStart - bigWidth)/2.0f;
+-				if (x + bigWidth > areaEnd) x = areaEnd - bigWidth;
++				const float countryBaseline = m_vPos.y + smallFont->getHeight()*smallScale + iconBorder*3;
++				const float bigBaseline = (countryRank != 0 ? countryBaseline + iconBorder*2 : m_vPos.y + iconBorder*3) + bigFont->getHeight()*bigScale;
++
++				// tiers: #1 rainbow, top 10 gold, top 1.000 silver, top 10.000 bronze, top 100k blue, top 500k green
++				Color rankColor = 0xffffffff;
++				if (globalRank == 1)
++				{
++					// animated rainbow (HSV -> RGB)
++					const float h = (float)std::fmod(engine->getTime()*0.35, 1.0)*6.0f;
++					const float x = 1.0f - std::fabs(std::fmod(h, 2.0f) - 1.0f);
++					float r = 0, gr = 0, b = 0;
++					if (h < 1) { r = 1; gr = x; }
++					else if (h < 2) { r = x; gr = 1; }
++					else if (h < 3) { gr = 1; b = x; }
++					else if (h < 4) { gr = x; b = 1; }
++					else if (h < 5) { r = x; b = 1; }
++					else { r = 1; b = x; }
++					rankColor = COLOR(255, (int)(r*255), (int)(gr*255), (int)(b*255));
++				}
++				else if (globalRank > 0 && globalRank <= 10)
++					rankColor = 0xffffd700; // gold
++				else if (globalRank > 0 && globalRank <= 1000)
++					rankColor = 0xffd0d6e0; // silver
++				else if (globalRank > 0 && globalRank <= 10000)
++					rankColor = 0xffcd7f32; // bronze
++				else if (globalRank > 0 && globalRank <= 100000)
++					rankColor = 0xff4da6ff; // blue
++				else if (globalRank > 0 && globalRank <= 500000)
++					rankColor = 0xff55dd55; // green
+ 
+ 				g->pushTransform();
+ 				{
+ 					g->scale(bigScale, bigScale);
+-					g->translate((int)x, (int)(m_vPos.y + bigFont->getHeight()*bigScale + m_vSize.y*0.03f));
+-					g->setColor(0xffffffff);
++					g->translate((int)(rightEdge - bigWidth), (int)bigBaseline);
++					g->setColor(rankColor);
+ 					g->drawString(bigFont, bigString);
+ 				}
+ 				g->popTransform();
+-- 
+2.43.0
+
