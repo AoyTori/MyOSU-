@@ -1401,7 +1401,7 @@ index 076511b..132f78b 100644
  		OD = OsuGameRules::getRawConstantOverallDifficultyForSpeedMultiplier(OsuGameRules::getRawHitWindow300(OD), (m_music != NULL && m_bIsPlaying && useAudioLibrarySpeedMultiplierForOverrideLockCalculationsIfPlaying ? getSpeedMultiplier() : m_osu->getSpeedMultiplier()));
  
 diff --git a/src/App/Osu/OsuBeatmapStandard.cpp b/src/App/Osu/OsuBeatmapStandard.cpp
-index 56f10c4..f30589d 100644
+index 56f10c4..d6c286e 100644
 --- a/src/App/Osu/OsuBeatmapStandard.cpp
 +++ b/src/App/Osu/OsuBeatmapStandard.cpp
 @@ -38,6 +38,9 @@
@@ -1436,7 +1436,7 @@ index 56f10c4..f30589d 100644
  
  		const int numHitObjects = m_hitobjects.size();
  		const int numCircles = m_selectedDifficulty2->getNumCircles();
-@@ -1654,7 +1655,35 @@ void OsuBeatmapStandard::onBeforeStop(bool quit)
+@@ -1654,7 +1655,39 @@ void OsuBeatmapStandard::onBeforeStop(bool quit)
  		const int num100s = m_osu->getScore()->getNum100s();
  		const int num50s = m_osu->getScore()->getNum50s();
  		const unsigned long legacyTotalScore = m_osu->getScore()->getScore();
@@ -1457,6 +1457,10 @@ index 56f10c4..f30589d 100644
 +
 +			OsuDatabaseBeatmap::LOAD_DIFFOBJ_RESULT diffresNormal = OsuDatabaseBeatmap::loadDifficultyHitObjects(osuFilePath, gameMode, normalAR, normalCS, speedMultiplier);
 +			OsuDifficultyCalculator::BeatmapDiffcalcData beatmapDataNormal(this, diffresNormal.diffobjects);
++			// the constructor reads CS/AR/OD from the beatmap, which are the Aoy values while playing
++			beatmapDataNormal.CS = normalCS;
++			beatmapDataNormal.AR = normalAR;
++			beatmapDataNormal.OD = normalOD;
 +			OsuDifficultyCalculator::DifficultyAttributes attributesNormal{};
 +			totalStars = OsuDifficultyCalculator::calculateDifficultyAttributes(attributesNormal, beatmapDataNormal);
 +			attributes = attributesNormal;
@@ -1473,7 +1477,7 @@ index 56f10c4..f30589d 100644
  		m_osu->getScore()->setStarsTomTotal(totalStars);
  		m_osu->getScore()->setStarsTomAim(attributes.AimDifficulty);
  		m_osu->getScore()->setStarsTomSpeed(attributes.SpeedDifficulty);
-@@ -1713,7 +1742,7 @@ void OsuBeatmapStandard::onBeforeStop(bool quit)
+@@ -1713,7 +1746,7 @@ void OsuBeatmapStandard::onBeforeStop(bool quit)
  				score.speedMultiplier = m_osu->getSpeedMultiplier();
  				score.CS = CS;
  				score.AR = AR;
@@ -1482,7 +1486,7 @@ index 56f10c4..f30589d 100644
  				score.HP = getHP();
  
  				//if (scoreVersion > 20180722)
-@@ -1736,7 +1765,11 @@ void OsuBeatmapStandard::onBeforeStop(bool quit)
+@@ -1736,7 +1769,11 @@ void OsuBeatmapStandard::onBeforeStop(bool quit)
  				score.md5hash = m_selectedDifficulty2->getMD5Hash(); // NOTE: necessary for "Use Mods"
  
  				// save it
@@ -2078,10 +2082,10 @@ index 0000000..b46ea5a
 +#endif
 diff --git a/src/App/Osu/OsuResultStats.cpp b/src/App/Osu/OsuResultStats.cpp
 new file mode 100644
-index 0000000..3e09b9b
+index 0000000..1705a16
 --- /dev/null
 +++ b/src/App/Osu/OsuResultStats.cpp
-@@ -0,0 +1,322 @@
+@@ -0,0 +1,337 @@
 +//================ myosu: result screen stats table ================//
 +//
 +// Purpose:		table at the bottom of the result screen (like osu! after a submit):
@@ -2260,7 +2264,22 @@ index 0000000..3e09b9b
 +
 +	Cell play[6];
 +	{
-+		const int globalPlace = globalPlaceOnMap(g_playScore);
++		// computed once (copying/sorting the top 100 every frame was way too slow)
++		static int cachedPlace = 0;
++		static double lastTry = -100.0;
++		static unsigned long long cachedForScore = 0;
++		if (cachedForScore != g_playScore)
++		{
++			cachedForScore = g_playScore;
++			cachedPlace = 0;
++			lastTry = -100.0;
++		}
++		if (cachedPlace == 0 && engine->getTime() > lastTry + 1.0)
++		{
++			lastTry = engine->getTime();
++			cachedPlace = globalPlaceOnMap(g_playScore);
++		}
++		const int globalPlace = cachedPlace;
 +		if (globalPlace > 0)
 +		{
 +			play[0].value = "#" + std::to_string(globalPlace);
