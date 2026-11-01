@@ -2490,7 +2490,7 @@ index 125d472..3cd222c 100644
  					const float cursorDelta = (m_beatmap->getCursorPos() - pos).length();
  
 diff --git a/src/App/Osu/OsuSongBrowser2.cpp b/src/App/Osu/OsuSongBrowser2.cpp
-index 4fc910e..60219f0 100644
+index 4fc910e..dc4b2e3 100644
 --- a/src/App/Osu/OsuSongBrowser2.cpp
 +++ b/src/App/Osu/OsuSongBrowser2.cpp
 @@ -54,9 +54,21 @@
@@ -2635,6 +2635,31 @@ index 4fc910e..60219f0 100644
  			m_scoreBrowser->getContainer()->addBaseUIElement(scoreButtons[i]);
  		}
  
+@@ -3009,6 +3089,24 @@ void OsuSongBrowser2::rebuildScoreButtons()
+ 
+ 	// layout
+ 	updateScoreBrowserLayout();
++
++	// myosu: center the list on the own (best) score, unless it is near the top anyway
++	if (validBeatmap && shownScores.size() > 0)
++	{
++		static ConVar *nameCvar = convar->getConVarByName("name");
++		const UString ownName = nameCvar->getString();
++		for (size_t i=0; i<shownScores.size() && i<m_scoreButtonCache.size(); i++)
++		{
++			if (shownScores[i].version == 777777 || shownScores[i].playerName != ownName) continue;
++
++			OsuUISongBrowserScoreButton *ownButton = m_scoreButtonCache[i];
++			const float buttonCenter = ownButton->getRelPos().y + ownButton->getSize().y/2.0f;
++			const float target = buttonCenter - m_scoreBrowser->getSize().y/2.0f;
++			if (target > 0.0f)
++				m_scoreBrowser->scrollToY(-(int)target, false);
++			break;
++		}
++	}
+ }
+ 
+ void OsuSongBrowser2::scheduleSearchUpdate(bool immediately)
 diff --git a/src/App/Osu/OsuSpinner.cpp b/src/App/Osu/OsuSpinner.cpp
 index d9f2124..68174a6 100644
 --- a/src/App/Osu/OsuSpinner.cpp
@@ -2659,7 +2684,7 @@ index d9f2124..68174a6 100644
  
  			if (angleDiff < -PI)
 diff --git a/src/App/Osu/OsuUISongBrowserScoreButton.cpp b/src/App/Osu/OsuUISongBrowserScoreButton.cpp
-index 9f47f27..4dbeeb4 100644
+index 9f47f27..1ad6402 100644
 --- a/src/App/Osu/OsuUISongBrowserScoreButton.cpp
 +++ b/src/App/Osu/OsuUISongBrowserScoreButton.cpp
 @@ -35,6 +35,7 @@
@@ -2670,7 +2695,21 @@ index 9f47f27..4dbeeb4 100644
  ConVar *OsuUISongBrowserScoreButton::m_osu_scores_sort_by_pp_ref = NULL;
  ConVar *OsuUISongBrowserScoreButton::m_osu_mods_ref = NULL;
  ConVar *OsuUISongBrowserScoreButton::m_osu_speed_override_ref = NULL;
-@@ -832,6 +833,10 @@ void OsuUISongBrowserScoreButton::setScore(const OsuDatabase::Score &score, cons
+@@ -190,7 +191,12 @@ void OsuUISongBrowserScoreButton::draw(Graphics *g)
+ 		g->setAlpha(0.75f);
+ 		g->drawString(usernameFont, string);
+ 		g->translate(-0.75f, -0.75f);
+-		g->setColor(0xffffffff);
++		{
++			// myosu: own scores (current profile) in green, so you find yourself quickly
++			static ConVar *nameCvar = convar->getConVarByName("name");
++			const bool isOwnScore = (m_style != STYLE::TOP_RANKS && m_score.version != 777777 && m_score.playerName == nameCvar->getString());
++			g->setColor(isOwnScore ? 0xff66ff66 : 0xffffffff);
++		}
+ 		g->drawString(usernameFont, string);
+ 	}
+ 	g->popTransform();
+@@ -832,6 +838,10 @@ void OsuUISongBrowserScoreButton::setScore(const OsuDatabase::Score &score, cons
  	UString achievedOn = "Achieved on ";
  	achievedOn.append(m_sScoreDateTime);
  
@@ -2681,7 +2720,7 @@ index 9f47f27..4dbeeb4 100644
  	// tooltip
  	m_tooltipLines.clear();
  	m_tooltipLines.push_back(achievedOn);
-@@ -943,7 +948,7 @@ UString OsuUISongBrowserScoreButton::getModsStringForDisplay(int mods)
+@@ -943,7 +953,7 @@ UString OsuUISongBrowserScoreButton::getModsStringForDisplay(int mods)
  		modsString.append("SD,");
  	if (mods & OsuReplay::Mods::DoubleTime)
  		modsString.append("DT,");
