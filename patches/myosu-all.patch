@@ -1515,7 +1515,7 @@ index 2332e79..f86b0a5 100644
  					const float cursorDelta = (m_beatmap->getCursorPos() - pos).length();
  
 diff --git a/src/App/Osu/OsuHUD.cpp b/src/App/Osu/OsuHUD.cpp
-index 5c30d1a..49e188a 100644
+index 5c30d1a..9163ac1 100644
 --- a/src/App/Osu/OsuHUD.cpp
 +++ b/src/App/Osu/OsuHUD.cpp
 @@ -37,6 +37,10 @@
@@ -1547,7 +1547,7 @@ index 5c30d1a..49e188a 100644
  			if (!isAutoClicking)
  				drawInputOverlay(g, m_osu->getScore()->getKeyCount(1), m_osu->getScore()->getKeyCount(2), m_osu->getScore()->getKeyCount(3), m_osu->getScore()->getKeyCount(4));
  		}
-@@ -1863,7 +1867,50 @@ void OsuHUD::drawScoreBoard(Graphics *g, std::string &beatmapMD5Hash, OsuScore *
+@@ -1863,7 +1867,53 @@ void OsuHUD::drawScoreBoard(Graphics *g, std::string &beatmapMD5Hash, OsuScore *
  {
  	const int maxVisibleDatabaseScores = m_osu->isInVRDraw() ? 3 : 4;
  
@@ -1558,7 +1558,9 @@ index 5c30d1a..49e188a 100644
 +	static std::string myosuHash;
 +	static size_t myosuNumLocal = (size_t)-1;
 +	static double myosuLastRebuild = -100.0;
-+	if (beatmapMD5Hash != myosuHash || localScores->size() != myosuNumLocal || engine->getTime() > myosuLastRebuild + 2.0)
++	static bool myosuHadGlobalScores = false;
++	const bool waitingForGlobalScores = (!myosuHadGlobalScores && engine->getTime() > myosuLastRebuild + 3.0); // retry until the top 50 arrived
++	if (beatmapMD5Hash != myosuHash || localScores->size() != myosuNumLocal || waitingForGlobalScores)
 +	{
 +		myosuHash = beatmapMD5Hash;
 +		myosuNumLocal = localScores->size();
@@ -1572,7 +1574,8 @@ index 5c30d1a..49e188a 100644
 +			beatmapID = selectedBeatmap->getSelectedDifficulty2()->getID();
 +
 +		std::vector<OsuDatabase::Score> globalScores;
-+		if (OsuBanchoApi::getBeatmapScores(beatmapID, globalScores))
++		myosuHadGlobalScores = OsuBanchoApi::getBeatmapScores(beatmapID, globalScores) || beatmapID <= 0;
++		if (globalScores.size() > 0)
 +			myosuScores.insert(myosuScores.end(), globalScores.begin(), globalScores.end());
 +
 +		std::stable_sort(myosuScores.begin(), myosuScores.end(), [](const OsuDatabase::Score &a, const OsuDatabase::Score &b) {
@@ -1624,7 +1627,7 @@ index 1d43a78..b9844ae 100644
  		m_modButtonAutopilot->click();
  	if (key == (KEYCODE)OsuKeyBindings::MOD_SPUNOUT.getInt())
 diff --git a/src/App/Osu/OsuOptionsMenu.cpp b/src/App/Osu/OsuOptionsMenu.cpp
-index a8a5508..39eca6f 100644
+index a8a5508..4733679 100644
 --- a/src/App/Osu/OsuOptionsMenu.cpp
 +++ b/src/App/Osu/OsuOptionsMenu.cpp
 @@ -25,6 +25,7 @@
@@ -1703,17 +1706,20 @@ index a8a5508..39eca6f 100644
  	addCheckbox("Show Skip Button during Intro", "Skip intro to first hitobject.", convar->getConVarByName("osu_skip_intro_enabled"));
  	addCheckbox("Show Skip Button during Breaks", "Skip breaks in the middle of beatmaps.", convar->getConVarByName("osu_skip_breaks_enabled"));
  	addSpacer();
-@@ -1440,6 +1486,20 @@ void OsuOptionsMenu::update()
+@@ -1440,6 +1486,23 @@ void OsuOptionsMenu::update()
  {
  	OsuScreenBackable::update();
  
 +	// myosu: write the osu! API textboxes back into their convars
++	if (m_bVisible)
 +	{
 +		static const char *apiConVarNames[4] = {"osu_api_country", "osu_api_client_id", "osu_api_client_secret", "osu_api_osudaily_key"};
++		static ConVar *apiConVars[4] = {NULL, NULL, NULL, NULL};
 +		for (int i=0; i<4; i++)
 +		{
 +			if (g_myosuApiTextboxes[i] == NULL) continue;
-+			ConVar *cvar = convar->getConVarByName(apiConVarNames[i]);
++			if (apiConVars[i] == NULL) apiConVars[i] = convar->getConVarByName(apiConVarNames[i]);
++			ConVar *cvar = apiConVars[i];
 +			UString text = g_myosuApiTextboxes[i]->getText();
 +			text = text.trim();
 +			if (text != cvar->getString())
@@ -1724,7 +1730,7 @@ index a8a5508..39eca6f 100644
  	// workshop background refresh takes some time, open context menu after loading is finished
  	// do this even if options menu is invisible (but only show context menu if visible after finished)
  	if (m_bWorkshopSkinSelectScheduled)
-@@ -2582,20 +2642,31 @@ void OsuOptionsMenu::onSkinSelect()
+@@ -2582,20 +2645,31 @@ void OsuOptionsMenu::onSkinSelect()
  		m_contextMenu->setRelPos(m_skinSelectLocalButton->getRelPos());
  		m_contextMenu->begin();
  
@@ -1762,7 +1768,7 @@ index a8a5508..39eca6f 100644
  
  			CBaseUIButton *button = m_contextMenu->addButton(skinFolders[i]);
  			if (skinFolders[i] == m_osu_skin_ref->getString())
-@@ -2614,6 +2685,14 @@ void OsuOptionsMenu::onSkinSelect()
+@@ -2614,6 +2688,14 @@ void OsuOptionsMenu::onSkinSelect()
  
  void OsuOptionsMenu::onSkinSelect2(UString skinName, int id)
  {
@@ -2348,7 +2354,7 @@ index 125d472..3cd222c 100644
  					const float cursorDelta = (m_beatmap->getCursorPos() - pos).length();
  
 diff --git a/src/App/Osu/OsuSongBrowser2.cpp b/src/App/Osu/OsuSongBrowser2.cpp
-index 4fc910e..ace51f8 100644
+index 4fc910e..60219f0 100644
 --- a/src/App/Osu/OsuSongBrowser2.cpp
 +++ b/src/App/Osu/OsuSongBrowser2.cpp
 @@ -54,9 +54,21 @@
@@ -2382,7 +2388,7 @@ index 4fc910e..ace51f8 100644
  
  	// build topbar right
  	m_topbarRight = new CBaseUIContainer(0, 0, 0, 0, "");
-@@ -1073,6 +1087,20 @@ void OsuSongBrowser2::drawSelectedBeatmapBackgroundImage(Graphics *g, Osu *osu,
+@@ -1073,6 +1087,21 @@ void OsuSongBrowser2::drawSelectedBeatmapBackgroundImage(Graphics *g, Osu *osu,
  
  void OsuSongBrowser2::update()
  {
@@ -2390,7 +2396,8 @@ index 4fc910e..ace51f8 100644
 +	if (OsuBanchoApi::consumeLeaderboardChanged())
 +		rebuildScoreButtons();
 +	{
-+		const int rankingMode = (convar->getConVarByName("osu_api_global_leaderboard")->getBool() ? 1 : 0);
++		static ConVar *globalLeaderboardCvar = convar->getConVarByName("osu_api_global_leaderboard");
++		const int rankingMode = (globalLeaderboardCvar->getBool() ? 1 : 0);
 +		if (rankingMode != g_myosuLastRankingMode)
 +		{
 +			g_myosuLastRankingMode = rankingMode;
@@ -2403,7 +2410,7 @@ index 4fc910e..ace51f8 100644
  	// HACKHACK: temporarily putting this on top as to support recalc while inPlayMode() (and songbrowser is invisible) for drawing strain graph in scrubbing timeline (and total stars statistics, and max total pp statistics)
  	// handle background star calculation (1)
  	if (m_bBackgroundStarCalcScheduled)
-@@ -2961,7 +2989,60 @@ void OsuSongBrowser2::rebuildScoreButtons()
+@@ -2961,7 +2990,60 @@ void OsuSongBrowser2::rebuildScoreButtons()
  	m_scoreBrowser->getContainer()->empty();
  
  	const bool validBeatmap = (m_selectedBeatmap != NULL && m_selectedBeatmap->getSelectedDifficulty2() != NULL);
@@ -2465,7 +2472,7 @@ index 4fc910e..ace51f8 100644
  
  	// top up cache as necessary
  	if (numScores > m_scoreButtonCache.size())
-@@ -2980,23 +3061,21 @@ void OsuSongBrowser2::rebuildScoreButtons()
+@@ -2980,23 +3062,21 @@ void OsuSongBrowser2::rebuildScoreButtons()
  		m_scoreBrowser->getContainer()->addBaseUIElement(m_scoreBrowserNoRecordsYetElement, m_scoreBrowserNoRecordsYetElement->getRelPos().x, m_scoreBrowserNoRecordsYetElement->getRelPos().y);
  	else
  	{
