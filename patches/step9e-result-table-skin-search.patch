@@ -1,0 +1,562 @@
+From 9e4dcde71adbeb73c61e83b6b235b975338d26b7 Mon Sep 17 00:00:00 2001
+From: myosu <none>
+Date: Sun, 1 Nov 2026 15:36:57 +0100
+Subject: [PATCH] Result screen stats table (this play + overall with changes),
+ skin search
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MvYBfaJwyXivAtVfcZSFtM
+---
+ src/App/Osu/OsuBanchoApi.cpp       |  10 +
+ src/App/Osu/OsuBanchoApi.h         |   1 +
+ src/App/Osu/OsuBeatmapStandard.cpp |   4 +
+ src/App/Osu/OsuOptionsMenu.cpp     |  45 +++-
+ src/App/Osu/OsuRankingScreen.cpp   |   8 +-
+ src/App/Osu/OsuResultStats.cpp     | 322 +++++++++++++++++++++++++++++
+ src/App/Osu/OsuResultStats.h       |  25 +++
+ 7 files changed, 408 insertions(+), 7 deletions(-)
+ create mode 100644 src/App/Osu/OsuResultStats.cpp
+ create mode 100644 src/App/Osu/OsuResultStats.h
+
+diff --git a/src/App/Osu/OsuBanchoApi.cpp b/src/App/Osu/OsuBanchoApi.cpp
+index 0e0d6a7..85351cd 100644
+--- a/src/App/Osu/OsuBanchoApi.cpp
++++ b/src/App/Osu/OsuBanchoApi.cpp
+@@ -926,3 +926,13 @@ bool OsuBanchoApi::isCountryRankEstimated()
+ {
+ 	return currentRank().countryEstimated;
+ }
++
++bool OsuBanchoApi::getCachedRank(float pp, int &globalRank, bool &estimated)
++{
++	std::lock_guard<std::mutex> lock(g_mutex);
++	std::map<long, RankResult>::iterator it = g_rankCache.find(ppKey(pp));
++	if (it == g_rankCache.end() || it->second.globalRank <= 0) return false;
++	globalRank = it->second.globalRank;
++	estimated = it->second.globalEstimated;
++	return true;
++}
+diff --git a/src/App/Osu/OsuBanchoApi.h b/src/App/Osu/OsuBanchoApi.h
+index 418c438..84e6814 100644
+--- a/src/App/Osu/OsuBanchoApi.h
++++ b/src/App/Osu/OsuBanchoApi.h
+@@ -26,6 +26,7 @@ public:
+ 	static int getCountryRank(); // 0 = unknown
+ 	static bool isGlobalRankEstimated();  // beyond the top 10.000 (the API does not list those players)
+ 	static bool isCountryRankEstimated();
++	static bool getCachedRank(float pp, int &globalRank, bool &estimated); // false if not loaded (yet)
+ 	static UString getCountryCode();
+ 	static UString getStatus();  // empty if everything is fine
+ 
+diff --git a/src/App/Osu/OsuBeatmapStandard.cpp b/src/App/Osu/OsuBeatmapStandard.cpp
+index 56f10c4..2a1a651 100644
+--- a/src/App/Osu/OsuBeatmapStandard.cpp
++++ b/src/App/Osu/OsuBeatmapStandard.cpp
+@@ -38,6 +38,8 @@
+ 
+ #include <string.h>
+ #include <sstream>
++#include "OsuResultStats.h"
++
+ #include <cctype>
+ #include <algorithm>
+ #include <chrono>
+@@ -1736,7 +1738,9 @@ void OsuBeatmapStandard::onBeforeStop(bool quit)
+ 				score.md5hash = m_selectedDifficulty2->getMD5Hash(); // NOTE: necessary for "Use Mods"
+ 
+ 				// save it
++				OsuResultStats::captureBefore(m_osu); // myosu: result screen table
+ 				scoreIndex = m_osu->getSongBrowser()->getDatabase()->addScore(m_selectedDifficulty2->getMD5Hash(), score);
++				OsuResultStats::captureAfter(m_osu, score, scoreIndex, m_selectedDifficulty2->getID());
+ 				if (scoreIndex == -1)
+ 					m_osu->getNotificationOverlay()->addNotification(UString::format("Failed saving score! md5hash.length() = %i", m_selectedDifficulty2->getMD5Hash().length()), 0xffff0000, false, 3.0f);
+ 			}
+diff --git a/src/App/Osu/OsuOptionsMenu.cpp b/src/App/Osu/OsuOptionsMenu.cpp
+index 5d77eb1..9423209 100644
+--- a/src/App/Osu/OsuOptionsMenu.cpp
++++ b/src/App/Osu/OsuOptionsMenu.cpp
+@@ -50,8 +50,22 @@
+ 
+ #include <iostream>
+ #include <fstream>
++#include <algorithm>
++#include <cctype>
+ 
+ 
++// myosu: skin search (type in the box at the top of the skin list, Enter filters)
++static UString g_myosuSkinFilter;
++static const int MYOSU_SKIN_SEARCH_ID = 4242;
++static bool myosuSkinMatches(const UString &skinName)
++{
++	if (g_myosuSkinFilter.length() < 1) return true;
++	std::string name = std::string(skinName.toUtf8());
++	std::string filter = std::string(g_myosuSkinFilter.toUtf8());
++	std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {return (char)std::tolower(c);});
++	std::transform(filter.begin(), filter.end(), filter.begin(), [](unsigned char c) {return (char)std::tolower(c);});
++	return name.find(filter) != std::string::npos;
++}
+ static CBaseUITextbox *g_myosuApiTextboxes[4] = {NULL, NULL, NULL, NULL}; // myosu
+ 
+ ConVar osu_options_save_on_back("osu_options_save_on_back", true, FCVAR_NONE);
+@@ -2627,20 +2641,31 @@ void OsuOptionsMenu::onSkinSelect()
+ 		m_contextMenu->setRelPos(m_skinSelectLocalButton->getRelPos());
+ 		m_contextMenu->begin();
+ 
++		// myosu: search box, type and press Enter (empty + Enter shows all skins again)
++		m_contextMenu->addTextbox(g_myosuSkinFilter, MYOSU_SKIN_SEARCH_ID);
++
+ 		const UString defaultText = "default";
+-		CBaseUIButton *buttonDefault = m_contextMenu->addButton(defaultText);
+-		if (defaultText == m_osu_skin_ref->getString())
+-			buttonDefault->setTextBrightColor(0xff00ff00);
++		if (myosuSkinMatches(defaultText))
++		{
++			CBaseUIButton *buttonDefault = m_contextMenu->addButton(defaultText);
++			if (defaultText == m_osu_skin_ref->getString())
++				buttonDefault->setTextBrightColor(0xff00ff00);
++		}
+ 
+ 		const UString defaultVRText = "defaultvr";
+-		CBaseUIButton *buttonDefaultVR = m_contextMenu->addButton(defaultVRText);
+-		if (defaultVRText == m_osu_skin_ref->getString())
+-			buttonDefaultVR->setTextBrightColor(0xff00ff00);
++		if (myosuSkinMatches(defaultVRText))
++		{
++			CBaseUIButton *buttonDefaultVR = m_contextMenu->addButton(defaultVRText);
++			if (defaultVRText == m_osu_skin_ref->getString())
++				buttonDefaultVR->setTextBrightColor(0xff00ff00);
++		}
+ 
+ 		for (int i=0; i<skinFolders.size(); i++)
+ 		{
+ 			if (skinFolders[i] == "." || skinFolders[i] == "..") // is this universal in every file system? too lazy to check. should probably fix this in the engine and not here
+ 				continue;
++			if (!myosuSkinMatches(skinFolders[i]))
++				continue;
+ 
+ 			CBaseUIButton *button = m_contextMenu->addButton(skinFolders[i]);
+ 			if (skinFolders[i] == m_osu_skin_ref->getString())
+@@ -2659,6 +2684,14 @@ void OsuOptionsMenu::onSkinSelect()
+ 
+ void OsuOptionsMenu::onSkinSelect2(UString skinName, int id)
+ {
++	// myosu: Enter in the search box -> show the filtered skin list
++	if (id == MYOSU_SKIN_SEARCH_ID)
++	{
++		g_myosuSkinFilter = skinName.trim();
++		onSkinSelect();
++		return;
++	}
++
+ 	m_osu_skin_is_from_workshop_ref->setValue(0.0f);
+ 
+ 	if (m_osu->getInstanceID() < 1)
+diff --git a/src/App/Osu/OsuRankingScreen.cpp b/src/App/Osu/OsuRankingScreen.cpp
+index b2e23d0..85b74cd 100644
+--- a/src/App/Osu/OsuRankingScreen.cpp
++++ b/src/App/Osu/OsuRankingScreen.cpp
+@@ -36,6 +36,7 @@
+ #include "OsuUIRankingScreenInfoLabel.h"
+ #include "OsuUIRankingScreenRankingPanel.h"
+ #include "OsuUISongBrowserScoreButton.h"
++#include "OsuResultStats.h"
+ 
+ ConVar osu_rankingscreen_topbar_height_percent("osu_rankingscreen_topbar_height_percent", 0.785f, FCVAR_NONE);
+ ConVar osu_rankingscreen_pp("osu_rankingscreen_pp", true, FCVAR_NONE);
+@@ -104,6 +105,9 @@ public:
+ 		const Color bottomColor = 0xdd493a0f;
+ 		g->setColor(0xffffffff);
+ 		g->fillGradient(m_vPos.x, m_vPos.y, m_vSize.x, m_vSize.y, topColor, topColor, bottomColor, bottomColor);
++
++		// myosu: this play + overall stats table
++		OsuResultStats::draw(g, m_vPos.x, m_vPos.y, m_vSize.x, m_vSize.y);
+ 	}
+ 
+ 	void setVisible2(bool visible2) {m_bVisible2 = visible2;}
+@@ -501,6 +505,7 @@ void OsuRankingScreen::setVisible(bool visible)
+ 
+ void OsuRankingScreen::setScore(OsuScore *score)
+ {
++	OsuResultStats::setShowing(true); // myosu
+ 	m_rankingPanel->setScore(score);
+ 	setGrade(score->getGrade());
+ 	setIndex(score->getIndex());
+@@ -555,6 +560,7 @@ void OsuRankingScreen::setScore(OsuScore *score)
+ 
+ void OsuRankingScreen::setScore(OsuDatabase::Score score, UString dateTime)
+ {
++	OsuResultStats::setShowing(false); // myosu
+ 	m_bIsLegacyScore = score.isLegacyScore;
+ 	m_bIsImportedLegacyScore = score.isImportedLegacyScore;
+ 	m_bIsUnranked = false;
+@@ -665,7 +671,7 @@ void OsuRankingScreen::updateLayout()
+ 	m_rankingIndex->setBackgroundColor(0xff745e13);
+ 	m_rankingIndex->setRelPosY(m_rankings->getSize().y + 1);
+ 
+-	m_rankingBottom->setSize(m_rankings->getSize().x + 2, m_osu->getScreenHeight()*0.2f);
++	m_rankingBottom->setSize(m_rankings->getSize().x + 2, m_osu->getScreenHeight()*0.36f); // myosu: room for the stats table
+ 	m_rankingBottom->setRelPosY(m_rankingIndex->getRelPos().y + m_rankingIndex->getSize().y);
+ 
+ 	m_rankingScrollDownInfoButton->setSize(m_container->getSize().x*0.2f * uiScale, m_container->getSize().y*0.1f * uiScale);
+diff --git a/src/App/Osu/OsuResultStats.cpp b/src/App/Osu/OsuResultStats.cpp
+new file mode 100644
+index 0000000..3e09b9b
+--- /dev/null
++++ b/src/App/Osu/OsuResultStats.cpp
+@@ -0,0 +1,322 @@
++//================ myosu: result screen stats table ================//
++//
++// Purpose:		table at the bottom of the result screen (like osu! after a submit):
++//				this play + overall profile stats, each with the change.
++//
++//===============================================================================//
++
++#include "OsuResultStats.h"
++
++#include "Engine.h"
++#include "ConVar.h"
++#include "Font.h"
++
++#include "Osu.h"
++#include "OsuScore.h"
++#include "OsuSongBrowser2.h"
++#include "OsuDatabase.h"
++#include "OsuBanchoApi.h"
++
++#include <string>
++#include <vector>
++#include <cmath>
++#include <algorithm>
++
++namespace
++{
++	struct Overall
++	{
++		float pp = 0.0f;
++		float accuracy = 0.0f;
++		int maxCombo = 0;
++		unsigned long long rankedScore = 0;
++		unsigned long long totalScore = 0;
++	};
++
++	Osu *g_osu = NULL;
++	bool g_bValid = false;
++	bool g_bShowing = false;
++
++	Overall g_before;
++	Overall g_after;
++
++	// this play
++	unsigned long long g_playScore = 0;
++	int g_playCombo = 0;
++	float g_playAccuracy = 0.0f;
++	float g_playPP = 0.0f;
++	int g_localPlace = 0;
++	int g_beatmapID = 0;
++	bool g_bNewBest = false;
++
++	Overall computeOverall(Osu *osu)
++	{
++		Overall o;
++		OsuDatabase *db = osu->getSongBrowser()->getDatabase();
++		ConVar *nameCvar = convar->getConVarByName("name", false);
++		const UString name = (nameCvar != NULL ? nameCvar->getString() : UString("Guest"));
++
++		const OsuDatabase::PlayerStats stats = db->calculatePlayerStats(name);
++		o.pp = stats.pp;
++		o.accuracy = stats.accuracy;
++		o.rankedScore = stats.totalScore;
++
++		std::unordered_map<std::string, std::vector<OsuDatabase::Score>> *scores = db->getScores();
++		for (auto &entry : *scores)
++		{
++			for (const OsuDatabase::Score &score : entry.second)
++			{
++				if (score.playerName != name) continue;
++				o.totalScore += score.score;
++				o.maxCombo = std::max(o.maxCombo, score.comboMax);
++			}
++		}
++		return o;
++	}
++
++	std::string withDots(unsigned long long value)
++	{
++		std::string s = std::to_string(value);
++		for (int i = (int)s.size() - 3; i > 0; i -= 3)
++			s.insert(i, ".");
++		return s;
++	}
++
++	std::string signedDots(long long value)
++	{
++		if (value == 0) return "";
++		return std::string(value > 0 ? "+" : "-") + withDots((unsigned long long)std::llabs(value));
++	}
++
++	std::string formatFloat(float value, int decimals)
++	{
++		char buf[64];
++		snprintf(buf, sizeof(buf), "%.*f", decimals, value);
++		std::string s(buf);
++		for (char &c : s)
++		{
++			if (c == '.') c = ',';
++		}
++		return s;
++	}
++
++	struct Cell
++	{
++		std::string value;
++		std::string delta;
++		int deltaSign = 0; // +1 green, -1 red, 0 grey
++	};
++
++	int globalPlaceOnMap(unsigned long long score)
++	{
++		std::vector<OsuDatabase::Score> globalScores;
++		if (!OsuBanchoApi::getBeatmapScores(g_beatmapID, globalScores) || globalScores.empty())
++			return 0;
++
++		// best score per player, then count everyone who is better
++		std::vector<std::string> seen;
++		int better = 0;
++		std::sort(globalScores.begin(), globalScores.end(), [](const OsuDatabase::Score &a, const OsuDatabase::Score &b) {return a.score > b.score;});
++		for (const OsuDatabase::Score &s : globalScores)
++		{
++			const std::string n = std::string(s.playerName.toUtf8());
++			if (std::find(seen.begin(), seen.end(), n) != seen.end()) continue;
++			seen.push_back(n);
++			if (s.score > score) better++;
++		}
++		return better + 1;
++	}
++}
++
++void OsuResultStats::captureBefore(Osu *osu)
++{
++	if (osu == NULL) return;
++	g_osu = osu;
++	g_before = computeOverall(osu);
++	g_bValid = false;
++}
++
++void OsuResultStats::captureAfter(Osu *osu, const OsuDatabase::Score &score, int scoreIndex, int beatmapID)
++{
++	if (osu == NULL || scoreIndex < 0) return;
++	g_osu = osu;
++	g_after = computeOverall(osu);
++
++	g_playScore = score.score;
++	g_playCombo = score.comboMax;
++	g_playAccuracy = OsuScore::calculateAccuracy(score.num300s, score.num100s, score.num50s, score.numMisses);
++	g_playPP = score.pp;
++	g_localPlace = scoreIndex + 1;
++	g_beatmapID = beatmapID;
++	g_bNewBest = (scoreIndex == 0);
++	g_bValid = true;
++
++	// start loading the rank for the new pp right away
++	OsuBanchoApi::setLocalPP(g_after.pp);
++}
++
++void OsuResultStats::setShowing(bool showing)
++{
++	g_bShowing = showing;
++}
++
++bool OsuResultStats::isShowing()
++{
++	return g_bShowing && g_bValid;
++}
++
++void OsuResultStats::draw(Graphics *g, float x, float y, float width, float height)
++{
++	if (!isShowing() || g_osu == NULL) return;
++
++	McFont *font = g_osu->getSubTitleFont();
++
++	// ---------------------------------------------------------------- values
++	const char *headers[6] = {"Rank", "Accuracy", "Max Combo", "Ranked Score", "Total Score", "Performance"};
++
++	Cell play[6];
++	{
++		const int globalPlace = globalPlaceOnMap(g_playScore);
++		if (globalPlace > 0)
++		{
++			play[0].value = "#" + std::to_string(globalPlace);
++			play[0].delta = "global";
++		}
++		else
++		{
++			play[0].value = "#" + std::to_string(g_localPlace);
++			play[0].delta = "local";
++		}
++		play[0].deltaSign = 0;
++
++		play[1].value = formatFloat(g_playAccuracy*100.0f, 2) + "%";
++		play[2].value = withDots(g_playCombo) + "x";
++		play[3].value = withDots(g_playScore);
++		play[4].value = withDots(g_playScore);
++		play[5].value = std::to_string((int)std::round(g_playPP)) + "pp";
++		for (int i=1; i<6; i++)
++		{
++			play[i].delta = (g_bNewBest ? "new!" : "");
++			play[i].deltaSign = (g_bNewBest ? 1 : 0);
++		}
++	}
++
++	Cell overall[6];
++	{
++		int rankBefore = 0, rankAfter = 0;
++		bool estBefore = false, estAfter = false;
++		const bool haveBefore = OsuBanchoApi::getCachedRank(g_before.pp, rankBefore, estBefore);
++		const bool haveAfter = OsuBanchoApi::getCachedRank(g_after.pp, rankAfter, estAfter);
++		if (haveAfter)
++		{
++			overall[0].value = std::string(estAfter ? "~" : "") + "#" + withDots(rankAfter);
++			if (haveBefore && rankBefore != rankAfter)
++			{
++				const long long gained = (long long)rankBefore - (long long)rankAfter;
++				overall[0].delta = signedDots(gained);
++				overall[0].deltaSign = (gained > 0 ? 1 : -1);
++			}
++		}
++		else
++			overall[0].value = "...";
++
++		const float accDelta = (g_after.accuracy - g_before.accuracy)*100.0f;
++		overall[1].value = formatFloat(g_after.accuracy*100.0f, 2) + "%";
++		if (std::fabs(accDelta) >= 0.005f)
++		{
++			overall[1].delta = std::string(accDelta > 0 ? "+" : "") + formatFloat(accDelta, 2) + "%";
++			overall[1].deltaSign = (accDelta > 0 ? 1 : -1);
++		}
++
++		overall[2].value = withDots(g_after.maxCombo) + "x";
++		if (g_after.maxCombo > g_before.maxCombo)
++		{
++			overall[2].delta = signedDots((long long)g_after.maxCombo - (long long)g_before.maxCombo);
++			overall[2].deltaSign = 1;
++		}
++
++		overall[3].value = withDots(g_after.rankedScore);
++		overall[3].delta = signedDots((long long)g_after.rankedScore - (long long)g_before.rankedScore);
++		overall[3].deltaSign = (g_after.rankedScore >= g_before.rankedScore ? 1 : -1);
++
++		overall[4].value = withDots(g_after.totalScore);
++		overall[4].delta = signedDots((long long)g_after.totalScore - (long long)g_before.totalScore);
++		overall[4].deltaSign = 1;
++
++		const float ppDelta = g_after.pp - g_before.pp;
++		overall[5].value = withDots((unsigned long long)std::round(g_after.pp)) + "pp";
++		if (std::fabs(ppDelta) >= 0.5f)
++		{
++			overall[5].delta = std::string(ppDelta > 0 ? "+" : "") + std::to_string((int)std::round(ppDelta)) + "pp";
++			overall[5].deltaSign = (ppDelta > 0 ? 1 : -1);
++		}
++	}
++
++	// ---------------------------------------------------------------- layout
++	const float margin = height*0.08f;
++	const float tableX = x + width*0.06f;
++	const float tableW = width*0.88f;
++	const float labelW = tableW*0.13f;
++	const float colW = (tableW - labelW) / 6.0f;
++	const float headerH = height*0.16f;
++	const float rowH = (height - 2*margin - headerH) / 2.0f;
++	const float tableY = y + margin;
++
++	auto drawText = [&](const std::string &text, float cx, float cy, float maxHeight, Color color, bool center) {
++		if (text.empty()) return;
++		const UString u(text.c_str());
++		float scale = maxHeight / font->getHeight();
++		const float maxWidth = colW*0.92f;
++		if (font->getStringWidth(u)*scale > maxWidth)
++			scale = maxWidth / font->getStringWidth(u);
++		const float w = font->getStringWidth(u)*scale;
++		g->pushTransform();
++		{
++			g->scale(scale, scale);
++			g->translate((int)(center ? cx - w/2.0f : cx), (int)(cy + font->getHeight()*scale/2.0f));
++			g->setColor(color);
++			g->drawString(font, u);
++		}
++		g->popTransform();
++	};
++
++	// background
++	g->setColor(0xcc111111);
++	g->fillRoundedRect((int)tableX, (int)tableY, (int)tableW, (int)(headerH + 2*rowH), (int)(height*0.04f));
++
++	// header
++	g->setColor(0xff222222);
++	g->fillRect((int)(tableX + labelW), (int)tableY, (int)(tableW - labelW), (int)headerH);
++	for (int i=0; i<6; i++)
++		drawText(headers[i], tableX + labelW + colW*i + colW/2.0f, tableY + headerH/2.0f, headerH*0.55f, 0xffffffff, true);
++
++	// rows
++	const char *rowLabels[2] = {"This play", "Overall"};
++	const Color rowColors[2] = {0xff1b7fb6, 0xff4f8a1d};
++	const Color labelColors[2] = {0xffffb000, 0xffffb000};
++	Cell *rows[2] = {play, overall};
++	for (int r=0; r<2; r++)
++	{
++		const float rowY = tableY + headerH + rowH*r;
++
++		g->setColor(0xff1a1206);
++		g->fillRect((int)tableX, (int)(rowY + 2), (int)labelW, (int)(rowH - 4));
++		drawText(rowLabels[r], tableX + labelW/2.0f, rowY + rowH/2.0f, rowH*0.3f, labelColors[r], true);
++
++		for (int c=0; c<6; c++)
++		{
++			const float cellX = tableX + labelW + colW*c;
++			g->setColor(rowColors[r]);
++			g->fillRect((int)(cellX + 2), (int)(rowY + 2), (int)(colW - 4), (int)(rowH - 4));
++
++			const Cell &cell = rows[r][c];
++			const bool hasDelta = !cell.delta.empty();
++			drawText(cell.value, cellX + colW/2.0f, rowY + rowH*(hasDelta ? 0.33f : 0.5f), rowH*0.3f, 0xffffffff, true);
++			if (hasDelta)
++			{
++				const Color deltaColor = (cell.deltaSign > 0 ? 0xffb6ff8a : (cell.deltaSign < 0 ? 0xffff8a8a : 0xffdddddd));
++				drawText("(" + cell.delta + ")", cellX + colW/2.0f, rowY + rowH*0.72f, rowH*0.24f, deltaColor, true);
++			}
++		}
++	}
++}
+diff --git a/src/App/Osu/OsuResultStats.h b/src/App/Osu/OsuResultStats.h
+new file mode 100644
+index 0000000..cbbc99c
+--- /dev/null
++++ b/src/App/Osu/OsuResultStats.h
+@@ -0,0 +1,25 @@
++//================ myosu: result screen stats table ================//
++//
++// Purpose:		table at the bottom of the result screen (like osu! after a submit):
++//				this play + overall profile stats, each with the change.
++//
++//===============================================================================//
++
++#ifndef OSURESULTSTATS_H
++#define OSURESULTSTATS_H
++
++#include "OsuDatabase.h"
++
++class Osu;
++class Graphics;
++
++namespace OsuResultStats
++{
++	void captureBefore(Osu *osu); // right before the new score gets saved
++	void captureAfter(Osu *osu, const OsuDatabase::Score &score, int scoreIndex, int beatmapID); // right after it was saved
++	void setShowing(bool showing); // true for a fresh play, false when looking at an old score
++	bool isShowing();
++	void draw(Graphics *g, float x, float y, float width, float height);
++}
++
++#endif
+-- 
+2.43.0
+
