@@ -1,0 +1,293 @@
+From 3fe7c1bc68f083a18b8e5cddc2bd1a8a0b26a68c Mon Sep 17 00:00:00 2001
+From: myosu <none>
+Date: Sun, 1 Nov 2026 15:31:08 +0100
+Subject: [PATCH] Spinner overlay hold, rank cache per profile pp, osudaily for
+ global rank, top 50 + own place, no overlap
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MvYBfaJwyXivAtVfcZSFtM
+---
+ src/App/Osu/OsuBanchoApi.cpp               | 81 ++++++++++++++++------
+ src/App/Osu/OsuSongBrowser2.cpp            | 25 ++++++-
+ src/App/Osu/OsuSpinner.cpp                 |  5 ++
+ src/App/Osu/OsuUISongBrowserUserButton.cpp | 11 ++-
+ 4 files changed, 96 insertions(+), 26 deletions(-)
+
+diff --git a/src/App/Osu/OsuBanchoApi.cpp b/src/App/Osu/OsuBanchoApi.cpp
+index 4d86c65..0e0d6a7 100644
+--- a/src/App/Osu/OsuBanchoApi.cpp
++++ b/src/App/Osu/OsuBanchoApi.cpp
+@@ -48,6 +48,15 @@ std::atomic<bool> g_bRunning(false);
+ int g_iGlobalRank = 0;        // guarded by g_mutex
+ int g_iCountryRank = 0;       // guarded by g_mutex
+ bool g_bGlobalEstimated = false;  // guarded by g_mutex
++struct RankResult
++{
++	int globalRank = 0;
++	int countryRank = 0;
++	bool globalEstimated = false;
++	bool countryEstimated = false;
++};
++std::map<long, RankResult> g_rankCache; // key: pp*10, guarded by g_mutex
++long ppKey(float pp) {return (long)std::lround(pp * 10.0f);}
+ bool g_bCountryEstimated = false; // guarded by g_mutex
+ UString g_countryCode;        // guarded by g_mutex
+ UString g_status;             // guarded by g_mutex
+@@ -407,7 +416,7 @@ void leaderboardWorker(std::string clientId, std::string clientSecret, int beatm
+ 	{
+ 		std::string response;
+ 		int status = 0;
+-		ok = httpRequest("osu.ppy.sh", "/api/v2/beatmaps/" + std::to_string(beatmapID) + "/scores?mode=osu&limit=50", L"GET", "", "Authorization: Bearer " + token + "\r\nAccept: application/json\r\nx-api-version: 20220705", response, status);
++		ok = httpRequest("osu.ppy.sh", "/api/v2/beatmaps/" + std::to_string(beatmapID) + "/scores?mode=osu&limit=100", L"GET", "", "Authorization: Bearer " + token + "\r\nAccept: application/json\r\nx-api-version: 20220705", response, status);
+ 		if (ok && status == 200)
+ 		{
+ 			const size_t scoresPos = findKey(response, 0, "scores");
+@@ -419,7 +428,7 @@ void leaderboardWorker(std::string clientId, std::string clientSecret, int beatm
+ 					OsuDatabase::Score sc;
+ 					sc.isLegacyScore = false;
+ 					sc.isImportedLegacyScore = true; // shows pp, no custom McOsu values
+-					sc.version = 20190226;
++					sc.version = 777777; // myosu: marks Bancho scores
+ 
+ 					// statistics (old and new API formats)
+ 					const size_t statsPos = findKey(response, i, "statistics");
+@@ -587,14 +596,17 @@ void rankWorker(std::string clientId, std::string clientSecret, std::string coun
+ 	}
+ 
+ 	float globalBoundaryPP = 0.0f;
+-	int globalRank = lookupRank(token, "", pp, globalBoundaryPP);
++	int globalRank = 0;
+ 	bool globalEstimated = false;
+-	if (globalRank == -1)
++
++	// osudaily (if a key is set): exact global rank with a single request
++	const int osudailyGlobal = osudailyRank(osudailyKey, pp);
++	if (osudailyGlobal > 0)
++		globalRank = osudailyGlobal;
++	else
+ 	{
+-		const int exactRank = osudailyRank(osudailyKey, pp);
+-		if (exactRank > 10000)
+-			globalRank = exactRank;
+-		else
++		globalRank = lookupRank(token, "", pp, globalBoundaryPP);
++		if (globalRank == -1)
+ 		{
+ 			globalRank = (int)std::round(estimateGlobalRank(pp, globalBoundaryPP));
+ 			globalEstimated = true;
+@@ -619,6 +631,12 @@ void rankWorker(std::string clientId, std::string clientSecret, std::string coun
+ 			if (globalAtCountryBoundary <= 0.0)
+ 				globalAtCountryBoundary = estimateGlobalRank(countryBoundaryPP, globalBoundaryPP);
+ 			const double ratio = (globalAtCountryBoundary > 10000.0 ? 10000.0 / globalAtCountryBoundary : 1.0);
++			if (globalBoundaryPP <= 0.0f)
++			{
++				// osudaily gave us the global rank: still need the pp of the global #10.000 for the estimate fallback
++				std::vector<float> pps;
++				if (fetchPage(token, "", 200, pps) && !pps.empty()) globalBoundaryPP = pps.back();
++			}
+ 			const double globalForPP = (globalEstimated ? estimateGlobalRank(pp, globalBoundaryPP) : (double)globalRank);
+ 			countryRank = (int)std::round(std::max(10001.0, globalForPP * ratio));
+ 			countryEstimated = true;
+@@ -627,10 +645,15 @@ void rankWorker(std::string clientId, std::string clientSecret, std::string coun
+ 
+ 	{
+ 		std::lock_guard<std::mutex> lock(g_mutex);
+-		g_iGlobalRank = globalRank;
+-		g_iCountryRank = countryRank;
+-		g_bGlobalEstimated = globalEstimated;
+-		g_bCountryEstimated = countryEstimated;
++		if (globalRank > 0)
++		{
++			RankResult result;
++			result.globalRank = globalRank;
++			result.countryRank = countryRank;
++			result.globalEstimated = globalEstimated;
++			result.countryEstimated = countryEstimated;
++			g_rankCache[ppKey(pp)] = result;
++		}
+ 		g_countryCode = UString(country.c_str());
+ 		g_status = (globalRank == 0 ? "API: could not load rankings" : "");
+ 	}
+@@ -719,11 +742,22 @@ void OsuBanchoApi::update()
+ 		g_fLastConfigChangeTime = engine->getTime();
+ 	}
+ 
+-	const bool ppChanged = (std::abs(g_fLocalPP - g_fFetchedPP) >= 0.5f);
+ 	const bool configChanged = (config != g_fetchedConfig);
+ 	const double now = engine->getTime();
++	if (configChanged && now > g_fLastConfigChangeTime + 1.5)
++	{
++		std::lock_guard<std::mutex> lock(g_mutex);
++		g_rankCache.clear();
++	}
+ 
+-	if (!g_bRunning && g_fLocalPP > 0.0f && (ppChanged || configChanged) && now > g_fLastConfigChangeTime + 1.5 && now > g_fLastFetchTime + 10.0)
++	bool cached = false;
++	{
++		std::lock_guard<std::mutex> lock(g_mutex);
++		cached = (g_rankCache.find(ppKey(g_fLocalPP)) != g_rankCache.end());
++	}
++	const bool samePPFailedRecently = (std::abs(g_fLocalPP - g_fFetchedPP) < 0.05f && now < g_fLastFetchTime + 30.0);
++
++	if (!g_bRunning && g_fLocalPP > 0.0f && (!cached || configChanged) && !(samePPFailedRecently && !configChanged) && now > g_fLastConfigChangeTime + 1.5 && now > g_fLastFetchTime + 2.0)
+ 	{
+ 		bool idIsNumber = true;
+ 		for (char c : clientId)
+@@ -751,16 +785,21 @@ void OsuBanchoApi::setLocalPP(float pp)
+ 	g_fLocalPP = pp;
+ }
+ 
+-int OsuBanchoApi::getGlobalRank()
++static RankResult currentRank()
+ {
+ 	std::lock_guard<std::mutex> lock(g_mutex);
+-	return g_iGlobalRank;
++	std::map<long, RankResult>::iterator it = g_rankCache.find(ppKey(g_fLocalPP));
++	return (it != g_rankCache.end() ? it->second : RankResult());
++}
++
++int OsuBanchoApi::getGlobalRank()
++{
++	return currentRank().globalRank;
+ }
+ 
+ int OsuBanchoApi::getCountryRank()
+ {
+-	std::lock_guard<std::mutex> lock(g_mutex);
+-	return g_iCountryRank;
++	return currentRank().countryRank;
+ }
+ 
+ UString OsuBanchoApi::getCountryCode()
+@@ -880,12 +919,10 @@ bool OsuBanchoApi::consumeLeaderboardChanged()
+ 
+ bool OsuBanchoApi::isGlobalRankEstimated()
+ {
+-	std::lock_guard<std::mutex> lock(g_mutex);
+-	return g_bGlobalEstimated;
++	return currentRank().globalEstimated;
+ }
+ 
+ bool OsuBanchoApi::isCountryRankEstimated()
+ {
+-	std::lock_guard<std::mutex> lock(g_mutex);
+-	return g_bCountryEstimated;
++	return currentRank().countryEstimated;
+ }
+diff --git a/src/App/Osu/OsuSongBrowser2.cpp b/src/App/Osu/OsuSongBrowser2.cpp
+index 13205da..ace51f8 100644
+--- a/src/App/Osu/OsuSongBrowser2.cpp
++++ b/src/App/Osu/OsuSongBrowser2.cpp
+@@ -2992,6 +2992,7 @@ void OsuSongBrowser2::rebuildScoreButtons()
+ 
+ 	// myosu: local scores + global top 50 from Bancho (ranked maps only), sorted together
+ 	std::vector<OsuDatabase::Score> shownScores;
++	std::vector<int> shownIndices; // place shown next to each score (empty = 1..n)
+ 	if (validBeatmap)
+ 	{
+ 		const std::string md5 = m_selectedBeatmap->getSelectedDifficulty2()->getMD5Hash();
+@@ -3007,13 +3008,30 @@ void OsuSongBrowser2::rebuildScoreButtons()
+ 			m_db->sortScores(md5);
+ 
+ 			// only the best score of every player (like on Bancho)
++			std::vector<OsuDatabase::Score> uniqueScores;
+ 			std::vector<std::string> seenNames;
+ 			for (size_t s=0; s<localScores.size(); s++)
+ 			{
+ 				const std::string name = std::string(localScores[s].playerName.toUtf8());
+ 				if (std::find(seenNames.begin(), seenNames.end(), name) != seenNames.end()) continue;
+ 				seenNames.push_back(name);
+-				shownScores.push_back(localScores[s]);
++				uniqueScores.push_back(localScores[s]);
++			}
++
++			// top 50 only; own scores below that are appended with the place they would have
++			for (size_t s=0; s<uniqueScores.size(); s++)
++			{
++				const bool isOwnScore = (uniqueScores[s].version != 777777);
++				if (s < 50)
++				{
++					shownScores.push_back(uniqueScores[s]);
++					shownIndices.push_back((int)s + 1);
++				}
++				else if (isOwnScore)
++				{
++					shownScores.push_back(uniqueScores[s]);
++					shownIndices.push_back((int)s + 1);
++				}
+ 			}
+ 
+ 			localScores = backup;
+@@ -3049,14 +3067,15 @@ void OsuSongBrowser2::rebuildScoreButtons()
+ 		{
+ 			OsuUISongBrowserScoreButton *button = m_scoreButtonCache[i];
+ 			button->setName(UString(m_selectedBeatmap->getSelectedDifficulty2()->getMD5Hash().c_str()));
+-			button->setScore(shownScores[i], m_selectedBeatmap->getSelectedDifficulty2(), i+1);
++			const int place = (i < shownIndices.size() ? shownIndices[i] : (int)i+1);
++			button->setScore(shownScores[i], m_selectedBeatmap->getSelectedDifficulty2(), place);
+ 			scoreButtons.push_back(button);
+ 		}
+ 
+ 		// add
+ 		for (size_t i=0; i<numScores; i++)
+ 		{
+-			scoreButtons[i]->setIndex(i+1);
++			scoreButtons[i]->setIndex(i < shownIndices.size() ? shownIndices[i] : (int)i+1);
+ 			m_scoreBrowser->getContainer()->addBaseUIElement(scoreButtons[i]);
+ 		}
+ 
+diff --git a/src/App/Osu/OsuSpinner.cpp b/src/App/Osu/OsuSpinner.cpp
+index d9f2124..68174a6 100644
+--- a/src/App/Osu/OsuSpinner.cpp
++++ b/src/App/Osu/OsuSpinner.cpp
+@@ -20,6 +20,7 @@
+ #include "OsuVR.h"
+ #include "OsuSkin.h"
+ #include "OsuGameRules.h"
++#include "OsuRelaxOverlay.h"
+ #include "OsuBeatmapStandard.h"
+ 
+ ConVar osu_spinner_use_ar_fadein("osu_spinner_use_ar_fadein", false, FCVAR_NONE, "whether spinners should fade in with AR (same as circles), or with hardcoded 400 ms fadein time (osu!default)");
+@@ -359,6 +360,10 @@ void OsuSpinner::update(long curPos)
+ 		{
+ 			bool isSpinning = m_beatmap->isClickHeld() || m_beatmap->getOsu()->getModAuto() || m_beatmap->getOsu()->getModRelax() || m_beatmap->getOsu()->getModSpunout();
+ 
++			// myosu: Relax holds the key for the whole spinner in the key overlay
++			if (m_beatmap->getOsu()->getModRelax())
++				OsuRelaxOverlay::onAutoClick(m_beatmap->getOsu(), m_iTime, m_iObjectDuration);
++
+ 			m_fDeltaOverflow += engine->getFrameTime() * 1000.0f;
+ 
+ 			if (angleDiff < -PI)
+diff --git a/src/App/Osu/OsuUISongBrowserUserButton.cpp b/src/App/Osu/OsuUISongBrowserUserButton.cpp
+index 3de38e6..28c4b8e 100644
+--- a/src/App/Osu/OsuUISongBrowserUserButton.cpp
++++ b/src/App/Osu/OsuUISongBrowserUserButton.cpp
+@@ -22,6 +22,7 @@
+ #include "OsuBanchoApi.h"
+ 
+ #include <cmath>
++#include <algorithm>
+ 
+ // NOTE: selected username is stored in m_sText
+ 
+@@ -218,7 +219,15 @@ void OsuUISongBrowserUserButton::draw(Graphics *g)
+ 				const UString bigString = UString::format("%s#%s", OsuBanchoApi::isGlobalRankEstimated() ? "~" : "", formatRank(globalRank).c_str());
+ 				float bigScale = ((m_vSize.y*0.5f) / bigFont->getHeight())*0.75f;
+ 				// shrink long numbers so they never run into the pp/accuracy text on the left
+-				const float maxBigWidth = m_vSize.x*0.36f;
++				float leftTextEnd = m_vPos.x + iconWidth + usernamePaddingLeft;
++				{
++					McFont *perfFont = m_osu->getSubTitleFont();
++					const float perfScale = ((m_vSize.y*0.5f) / perfFont->getHeight())*0.3f;
++					const float perfWidth = perfFont->getStringWidth(UString::format("Performance: %ipp", (int)std::round(m_fPP)))*perfScale;
++					const float accWidth = perfFont->getStringWidth(UString::format("Accuracy: %.2f%%", m_fAcc*100.0f))*perfScale;
++					leftTextEnd += std::max(perfWidth, accWidth);
++				}
++				const float maxBigWidth = std::max(m_vSize.x*0.15f, rightEdge - leftTextEnd - m_vSize.y*0.1f);
+ 				if (bigFont->getStringWidth(bigString)*bigScale > maxBigWidth)
+ 					bigScale = maxBigWidth / bigFont->getStringWidth(bigString);
+ 				const float bigWidth = bigFont->getStringWidth(bigString)*bigScale;
+-- 
+2.43.0
+
