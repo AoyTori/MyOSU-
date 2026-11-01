@@ -52,14 +52,14 @@ jobs:
           if [ -s out/fehler.txt ]; then echo "===== FEHLER IN DIESEN DATEIEN ====="; cat out/fehler.txt; exit 1; fi
           LIBDIRS=""
           for d in libraries/*/lib/windows; do LIBDIRS="$LIBDIRS -L$d"; done
-          g++ -s -mwindows -static-libgcc -static-libstdc++ -o out/McOsu.exe out/*.o $LIBDIRS \
+          g++ -s -mwindows -static-libgcc -static-libstdc++ -o out/MyOsu.exe out/*.o $LIBDIRS \
             -logg -lADLMIDI -lmad -lmodplug -lsmpeg -lgme -lvorbis -lopus -lvorbisfile -ldiscord-rpc -lsteam_api \
             -lSDL2_mixer_ext.dll -lSDL2 -ld3dcompiler_47 -ld3d11 -ldxgi -lopenvr_api -llibcurl -llibxinput9_1_0 \
             -llibBulletSoftBody -llibBulletDynamics -llibBulletCollision -llibLinearMath -lfreetype -lopengl32 \
             -lOpenCL -lvulkan-1 -lglew32 -lglu32 -lgdi32 -lbass -lbass_fx -lcomctl32 -lDwmapi -lComdlg32 -lpsapi \
             -lenet -lws2_32 -lwinhttp -lwinmm -Wl,-Bstatic -lpthread -Wl,-Bdynamic -llibjpeg -llibatomic
           mkdir -p dist
-          cp out/McOsu.exe dist/
+          cp out/MyOsu.exe dist/
           cp build/*.dll dist/
           for dll in libwinpthread-1.dll libatomic-1.dll libgcc_s_dw2-1.dll libstdc++-6.dll; do
             if [ -f "/mingw32/bin/$dll" ]; then cp "/mingw32/bin/$dll" dist/; fi
@@ -68,6 +68,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: McOsu-exe
+          name: MyOsu-exe
           path: McEngine/McEngine/dist/*
           if-no-files-found: error
