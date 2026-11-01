@@ -1,0 +1,150 @@
+From 8d5f69aadcf00eb58f979b99864f3b5c78802bec Mon Sep 17 00:00:00 2001
+From: myosu <none>
+Date: Sun, 1 Nov 2026 15:09:02 +0100
+Subject: [PATCH] Exact global ranks beyond the top 10.000 via the osudaily.net
+ API (optional key)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MvYBfaJwyXivAtVfcZSFtM
+---
+ src/App/Osu/OsuBanchoApi.cpp   | 54 +++++++++++++++++++++++++++++-----
+ src/App/Osu/OsuOptionsMenu.cpp |  8 +++--
+ 2 files changed, 52 insertions(+), 10 deletions(-)
+
+diff --git a/src/App/Osu/OsuBanchoApi.cpp b/src/App/Osu/OsuBanchoApi.cpp
+index ce5d926..4d86c65 100644
+--- a/src/App/Osu/OsuBanchoApi.cpp
++++ b/src/App/Osu/OsuBanchoApi.cpp
+@@ -35,6 +35,7 @@
+ ConVar osu_api_client_id("osu_api_client_id", "", FCVAR_NONE, "osu! API v2 OAuth client ID (osu.ppy.sh -> Settings -> OAuth -> New OAuth Application)");
+ ConVar osu_api_client_secret("osu_api_client_secret", "", FCVAR_NONE, "osu! API v2 OAuth client secret");
+ ConVar osu_api_global_leaderboard("osu_api_global_leaderboard", true, FCVAR_NONE, "show the global top 50 of ranked beatmaps next to your local scores");
++ConVar osu_api_osudaily_key("osu_api_osudaily_key", "", FCVAR_NONE, "osudaily.net API key (optional): exact ranks beyond the top 10.000");
+ ConVar osu_api_country("osu_api_country", "", FCVAR_NONE, "two letter country code for the country rank (e.g. DE), empty = no country rank");
+ 
+ namespace
+@@ -551,7 +552,32 @@ double estimateGlobalRank(float pp, float pp10k)
+ 	return anchors[numAnchors-1][0];
+ }
+ 
+-void rankWorker(std::string clientId, std::string clientSecret, std::string country, float pp)
++// exact global rank for a pp value from osudaily.net (needs a free osudaily API key), 0 on error
++int osudailyRank(const std::string &key, float pp)
++{
++	if (key.empty() || pp <= 0.0f) return 0;
++
++	char ppString[32];
++	snprintf(ppString, sizeof(ppString), "%.2f", pp);
++	const std::string query = "?k=" + key + "&t=pp&v=" + std::string(ppString) + "&m=0";
++
++	const char *paths[] = {"/api/pp.php", "/api/pp"};
++	for (const char *path : paths)
++	{
++		std::string response;
++		int status = 0;
++		if (!httpRequest("osudaily.net", std::string(path) + query, L"GET", "", "Accept: application/json", response, status) || status != 200)
++			continue;
++
++		const size_t pos = findKey(response, skipWs(response, 0), "rank");
++		if (pos == std::string::npos) continue;
++		const int rank = std::atoi(rawValueAt(response, pos).c_str());
++		if (rank > 0) return rank;
++	}
++	return 0;
++}
++
++void rankWorker(std::string clientId, std::string clientSecret, std::string country, float pp, std::string osudailyKey)
+ {
+ 	std::string token;
+ 	if (!getToken(clientId, clientSecret, token))
+@@ -565,8 +591,14 @@ void rankWorker(std::string clientId, std::string clientSecret, std::string coun
+ 	bool globalEstimated = false;
+ 	if (globalRank == -1)
+ 	{
+-		globalRank = (int)std::round(estimateGlobalRank(pp, globalBoundaryPP));
+-		globalEstimated = true;
++		const int exactRank = osudailyRank(osudailyKey, pp);
++		if (exactRank > 10000)
++			globalRank = exactRank;
++		else
++		{
++			globalRank = (int)std::round(estimateGlobalRank(pp, globalBoundaryPP));
++			globalEstimated = true;
++		}
+ 	}
+ 
+ 	int countryRank = 0;
+@@ -578,9 +610,17 @@ void rankWorker(std::string clientId, std::string clientSecret, std::string coun
+ 		if (countryRank == -1)
+ 		{
+ 			// assume the country has the same share of players at every pp level
+-			const double globalAtCountryBoundary = estimateGlobalRank(countryBoundaryPP, globalBoundaryPP);
++			double globalAtCountryBoundary = 0.0;
++			if (!osudailyKey.empty())
++			{
++				Sleep(1100); // osudaily asks for at most 1 request per second
++				globalAtCountryBoundary = osudailyRank(osudailyKey, countryBoundaryPP);
++			}
++			if (globalAtCountryBoundary <= 0.0)
++				globalAtCountryBoundary = estimateGlobalRank(countryBoundaryPP, globalBoundaryPP);
+ 			const double ratio = (globalAtCountryBoundary > 10000.0 ? 10000.0 / globalAtCountryBoundary : 1.0);
+-			countryRank = (int)std::round(std::max(10001.0, estimateGlobalRank(pp, globalBoundaryPP) * ratio));
++			const double globalForPP = (globalEstimated ? estimateGlobalRank(pp, globalBoundaryPP) : (double)globalRank);
++			countryRank = (int)std::round(std::max(10001.0, globalForPP * ratio));
+ 			countryEstimated = true;
+ 		}
+ 	}
+@@ -672,7 +712,7 @@ void OsuBanchoApi::update()
+ 	}
+ 
+ 	// debounce: wait until the user has stopped typing in the options for a moment
+-	const std::string config = clientId + "\n" + clientSecret + "\n" + country;
++	const std::string config = clientId + "\n" + clientSecret + "\n" + country + "\n" + std::string(osu_api_osudaily_key.getString().toUtf8());
+ 	if (config != g_lastConfig)
+ 	{
+ 		g_lastConfig = config;
+@@ -701,7 +741,7 @@ void OsuBanchoApi::update()
+ 		{
+ 			setStatus("API: loading rank ...");
+ 			g_bRunning = true;
+-			std::thread(rankWorker, clientId, clientSecret, country, g_fLocalPP).detach();
++			std::thread(rankWorker, clientId, clientSecret, country, g_fLocalPP, std::string(osu_api_osudaily_key.getString().toUtf8())).detach();
+ 		}
+ 	}
+ }
+diff --git a/src/App/Osu/OsuOptionsMenu.cpp b/src/App/Osu/OsuOptionsMenu.cpp
+index 9dec81a..5d77eb1 100644
+--- a/src/App/Osu/OsuOptionsMenu.cpp
++++ b/src/App/Osu/OsuOptionsMenu.cpp
+@@ -52,7 +52,7 @@
+ #include <fstream>
+ 
+ 
+-static CBaseUITextbox *g_myosuApiTextboxes[3] = {NULL, NULL, NULL}; // myosu
++static CBaseUITextbox *g_myosuApiTextboxes[4] = {NULL, NULL, NULL, NULL}; // myosu
+ 
+ ConVar osu_options_save_on_back("osu_options_save_on_back", true, FCVAR_NONE);
+ ConVar osu_options_high_quality_sliders("osu_options_high_quality_sliders", false, FCVAR_NONE);
+@@ -610,6 +610,8 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
+ 	g_myosuApiTextboxes[0] = addTextbox(convar->getConVarByName("osu_api_country")->getString(), "Country (e.g. DE):", convar->getConVarByName("osu_api_country"));
+ 	g_myosuApiTextboxes[1] = addTextbox(convar->getConVarByName("osu_api_client_id")->getString(), "Client ID:", convar->getConVarByName("osu_api_client_id"));
+ 	g_myosuApiTextboxes[2] = addTextbox(convar->getConVarByName("osu_api_client_secret")->getString(), "Client Secret:", convar->getConVarByName("osu_api_client_secret"));
++	addLabel("Optional, exact ranks beyond the top 10.000: free key from osudaily.net/api.php");
++	g_myosuApiTextboxes[3] = addTextbox(convar->getConVarByName("osu_api_osudaily_key")->getString(), "osudaily Key:", convar->getConVarByName("osu_api_osudaily_key"));
+ 	addSpacer();
+ 	addCheckbox("Include Relax/Autopilot for total weighted pp/acc", "NOTE: osu! does not allow this (since these mods are unranked).\nShould relax/autopilot scores be included in the weighted pp/acc calculation?", convar->getConVarByName("osu_user_include_relax_and_autopilot_for_stats"));
+ 	addCheckbox("Disable osu!lazer star/pp Relax/Autopilot nerfs", "Disabled: osu!lazer algorithm default. Relax/Autopilot scores are nerfed.\nEnabled: McOsu default. All Relax/Autopilot nerfs are disabled.", convar->getConVarByName("osu_stars_and_pp_lazer_relax_autopilot_nerf_disabled"));
+@@ -1471,8 +1473,8 @@ void OsuOptionsMenu::update()
+ 
+ 	// myosu: write the osu! API textboxes back into their convars
+ 	{
+-		static const char *apiConVarNames[3] = {"osu_api_country", "osu_api_client_id", "osu_api_client_secret"};
+-		for (int i=0; i<3; i++)
++		static const char *apiConVarNames[4] = {"osu_api_country", "osu_api_client_id", "osu_api_client_secret", "osu_api_osudaily_key"};
++		for (int i=0; i<4; i++)
+ 		{
+ 			if (g_myosuApiTextboxes[i] == NULL) continue;
+ 			ConVar *cvar = convar->getConVarByName(apiConVarNames[i]);
+-- 
+2.43.0
+
