@@ -1,0 +1,112 @@
+From 4b304dc23ebbc1559b1734d934d961b3ef68c3d0 Mon Sep 17 00:00:00 2001
+From: myosu <none>
+Date: Sun, 1 Nov 2026 01:53:46 +0100
+Subject: [PATCH] Global/Local ranking toggle in song browser, only best score
+ per player in global mode
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MvYBfaJwyXivAtVfcZSFtM
+---
+ src/App/Osu/OsuHUD.cpp          | 15 ++++++++++++++
+ src/App/Osu/OsuSongBrowser2.cpp | 35 ++++++++++++++++++++++++++++++++-
+ 2 files changed, 49 insertions(+), 1 deletion(-)
+
+diff --git a/src/App/Osu/OsuHUD.cpp b/src/App/Osu/OsuHUD.cpp
+index 2e3ef31..49e188a 100644
+--- a/src/App/Osu/OsuHUD.cpp
++++ b/src/App/Osu/OsuHUD.cpp
+@@ -1893,6 +1893,21 @@ void OsuHUD::drawScoreBoard(Graphics *g, std::string &beatmapMD5Hash, OsuScore *
+ 		std::stable_sort(myosuScores.begin(), myosuScores.end(), [](const OsuDatabase::Score &a, const OsuDatabase::Score &b) {
+ 			return a.score > b.score;
+ 		});
++
++		// with the global top 50: only the best score of every player (like on Bancho)
++		if (globalScores.size() > 0)
++		{
++			std::vector<OsuDatabase::Score> unique;
++			std::vector<std::string> seenNames;
++			for (size_t s=0; s<myosuScores.size(); s++)
++			{
++				const std::string name = std::string(myosuScores[s].playerName.toUtf8());
++				if (std::find(seenNames.begin(), seenNames.end(), name) != seenNames.end()) continue;
++				seenNames.push_back(name);
++				unique.push_back(myosuScores[s]);
++			}
++			myosuScores.swap(unique);
++		}
+ 	}
+ 
+ 	const std::vector<OsuDatabase::Score> *scores = &myosuScores;
+diff --git a/src/App/Osu/OsuSongBrowser2.cpp b/src/App/Osu/OsuSongBrowser2.cpp
+index 5a342f9..13205da 100644
+--- a/src/App/Osu/OsuSongBrowser2.cpp
++++ b/src/App/Osu/OsuSongBrowser2.cpp
+@@ -55,9 +55,20 @@
+ #include "OsuUISongBrowserScoreButton.h"
+ #include "OsuUIUserStatsScreenLabel.h"
+ #include "OsuBanchoApi.h"
++#include <algorithm>
+ 
+ 
+ 
++
++// myosu: Global/Local ranking toggle
++static CBaseUIButton *g_myosuRankingButton = NULL;
++static int g_myosuLastRankingMode = -1;
++static void myosuOnRankingButtonClicked(CBaseUIButton *button)
++{
++	ConVar *cvar = convar->getConVarByName("osu_api_global_leaderboard");
++	cvar->setValue(cvar->getBool() ? 0.0f : 1.0f);
++}
++
+ ConVar osu_gamemode("osu_gamemode", "std", FCVAR_NONE);
+ 
+ ConVar osu_songbrowser_sortingtype("osu_songbrowser_sortingtype", "By Date Added", FCVAR_NONE);
+@@ -489,6 +500,8 @@ OsuSongBrowser2::OsuSongBrowser2(Osu *osu) : OsuScreenBackable(osu)
+ 	m_scoreSortButton->setClickCallback( fastdelegate::MakeDelegate(this, &OsuSongBrowser2::onSortScoresClicked) );
+ 	m_webButton = addTopBarLeftButton("Web");
+ 	m_webButton->setClickCallback( fastdelegate::MakeDelegate(this, &OsuSongBrowser2::onWebClicked) );
++	g_myosuRankingButton = addTopBarLeftButton("Global");
++	g_myosuRankingButton->setClickCallback( CBaseUIButton::ButtonClickCallback(&myosuOnRankingButtonClicked) );
+ 
+ 	// build topbar right
+ 	m_topbarRight = new CBaseUIContainer(0, 0, 0, 0, "");
+@@ -1077,6 +1090,16 @@ void OsuSongBrowser2::update()
+ 	// myosu: new global scores arrived -> refresh the score list
+ 	if (OsuBanchoApi::consumeLeaderboardChanged())
+ 		rebuildScoreButtons();
++	{
++		const int rankingMode = (convar->getConVarByName("osu_api_global_leaderboard")->getBool() ? 1 : 0);
++		if (rankingMode != g_myosuLastRankingMode)
++		{
++			g_myosuLastRankingMode = rankingMode;
++			if (g_myosuRankingButton != NULL)
++				g_myosuRankingButton->setText(rankingMode == 1 ? "Global" : "Local");
++			rebuildScoreButtons();
++		}
++	}
+ 
+ 	// HACKHACK: temporarily putting this on top as to support recalc while inPlayMode() (and songbrowser is invisible) for drawing strain graph in scrubbing timeline (and total stars statistics, and max total pp statistics)
+ 	// handle background star calculation (1)
+@@ -2982,7 +3005,17 @@ void OsuSongBrowser2::rebuildScoreButtons()
+ 			const std::vector<OsuDatabase::Score> backup = localScores;
+ 			localScores.insert(localScores.end(), globalScores.begin(), globalScores.end());
+ 			m_db->sortScores(md5);
+-			shownScores = localScores;
++
++			// only the best score of every player (like on Bancho)
++			std::vector<std::string> seenNames;
++			for (size_t s=0; s<localScores.size(); s++)
++			{
++				const std::string name = std::string(localScores[s].playerName.toUtf8());
++				if (std::find(seenNames.begin(), seenNames.end(), name) != seenNames.end()) continue;
++				seenNames.push_back(name);
++				shownScores.push_back(localScores[s]);
++			}
++
+ 			localScores = backup;
+ 		}
+ 		else
+-- 
+2.43.0
+
