@@ -1,0 +1,104 @@
+From 99a4917f67f93b3ad1c32c323f73b09e4f5edd96 Mon Sep 17 00:00:00 2001
+From: myosu <none>
+Date: Sun, 1 Nov 2026 01:35:00 +0100
+Subject: [PATCH] Global top 50 in the in-game scoreboard, option to hide
+ custom CS/AR/OD/HP in score list
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MvYBfaJwyXivAtVfcZSFtM
+---
+ src/App/Osu/OsuHUD.cpp                      | 34 ++++++++++++++++++++-
+ src/App/Osu/OsuOptionsMenu.cpp              |  1 +
+ src/App/Osu/OsuUISongBrowserScoreButton.cpp |  5 +++
+ 3 files changed, 39 insertions(+), 1 deletion(-)
+
+diff --git a/src/App/Osu/OsuHUD.cpp b/src/App/Osu/OsuHUD.cpp
+index b924abb..2e3ef31 100644
+--- a/src/App/Osu/OsuHUD.cpp
++++ b/src/App/Osu/OsuHUD.cpp
+@@ -37,6 +37,10 @@
+ #include "OsuScore.h"
+ #include "OsuSongBrowser2.h"
+ #include "OsuDatabase.h"
++#include "OsuBanchoApi.h"
++#include "OsuBeatmap.h"
++#include "OsuDatabaseBeatmap.h"
++#include <algorithm>
+ 
+ #include "OsuHitObject.h"
+ #include "OsuCircle.h"
+@@ -1863,7 +1867,35 @@ void OsuHUD::drawScoreBoard(Graphics *g, std::string &beatmapMD5Hash, OsuScore *
+ {
+ 	const int maxVisibleDatabaseScores = m_osu->isInVRDraw() ? 3 : 4;
+ 
+-	const std::vector<OsuDatabase::Score> *scores = &((*m_osu->getSongBrowser()->getDatabase()->getScores())[beatmapMD5Hash]);
++	// myosu: local scores + Bancho top 50 (ranked maps), sorted by score (cached, rebuilt when something changes)
++	const std::vector<OsuDatabase::Score> *localScores = &((*m_osu->getSongBrowser()->getDatabase()->getScores())[beatmapMD5Hash]);
++	static std::vector<OsuDatabase::Score> myosuScores;
++	static std::string myosuHash;
++	static size_t myosuNumLocal = (size_t)-1;
++	static double myosuLastRebuild = -100.0;
++	if (beatmapMD5Hash != myosuHash || localScores->size() != myosuNumLocal || engine->getTime() > myosuLastRebuild + 2.0)
++	{
++		myosuHash = beatmapMD5Hash;
++		myosuNumLocal = localScores->size();
++		myosuLastRebuild = engine->getTime();
++
++		myosuScores = *localScores;
++
++		int beatmapID = 0;
++		OsuBeatmap *selectedBeatmap = m_osu->getSelectedBeatmap();
++		if (selectedBeatmap != NULL && selectedBeatmap->getSelectedDifficulty2() != NULL)
++			beatmapID = selectedBeatmap->getSelectedDifficulty2()->getID();
++
++		std::vector<OsuDatabase::Score> globalScores;
++		if (OsuBanchoApi::getBeatmapScores(beatmapID, globalScores))
++			myosuScores.insert(myosuScores.end(), globalScores.begin(), globalScores.end());
++
++		std::stable_sort(myosuScores.begin(), myosuScores.end(), [](const OsuDatabase::Score &a, const OsuDatabase::Score &b) {
++			return a.score > b.score;
++		});
++	}
++
++	const std::vector<OsuDatabase::Score> *scores = &myosuScores;
+ 	const int numScores = scores->size();
+ 
+ 	if (numScores < 1) return;
+diff --git a/src/App/Osu/OsuOptionsMenu.cpp b/src/App/Osu/OsuOptionsMenu.cpp
+index 968399d..f226374 100644
+--- a/src/App/Osu/OsuOptionsMenu.cpp
++++ b/src/App/Osu/OsuOptionsMenu.cpp
+@@ -613,6 +613,7 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
+ 	addSpacer();
+ 	addCheckbox("Include Relax/Autopilot for total weighted pp/acc", "NOTE: osu! does not allow this (since these mods are unranked).\nShould relax/autopilot scores be included in the weighted pp/acc calculation?", convar->getConVarByName("osu_user_include_relax_and_autopilot_for_stats"));
+ 	addCheckbox("Disable osu!lazer star/pp Relax/Autopilot nerfs", "Disabled: osu!lazer algorithm default. Relax/Autopilot scores are nerfed.\nEnabled: McOsu default. All Relax/Autopilot nerfs are disabled.", convar->getConVarByName("osu_stars_and_pp_lazer_relax_autopilot_nerf_disabled"));
++	addCheckbox("Hide custom CS/AR/OD/HP in score list", "Hides values like \"CS:2, AR:10.3\" next to scores (the speed stays visible).", convar->getConVarByName("osu_scores_hide_custom_values"));
+ 	addCheckbox("Show pp instead of score in scorebrowser", "Only McOsu scores and manually imported scores will show pp.\nSee Songbrowser > User Button > Top Ranks > Gear Button > \"Import osu! scores of <NAME>\".", convar->getConVarByName("osu_scores_sort_by_pp"));
+ 	addCheckbox("Always enable touch device pp nerf mod", "Keep touch device pp nerf mod active even when resetting all mods.", convar->getConVarByName("osu_mod_touchdevice"));
+ 	addCheckbox("Show osu! scores.db user names in user switcher", "Only relevant if \"Load osu! scores.db\" is enabled.\nShould the user switcher show ALL user names from ALL scores?\n(Even from ones you got in your database because you watched a replay?)", convar->getConVarByName("osu_user_switcher_include_legacy_scores_for_names"));
+diff --git a/src/App/Osu/OsuUISongBrowserScoreButton.cpp b/src/App/Osu/OsuUISongBrowserScoreButton.cpp
+index d952bb8..4dbeeb4 100644
+--- a/src/App/Osu/OsuUISongBrowserScoreButton.cpp
++++ b/src/App/Osu/OsuUISongBrowserScoreButton.cpp
+@@ -35,6 +35,7 @@
+ 
+ #include <chrono>
+ 
++ConVar osu_scores_hide_custom_values("osu_scores_hide_custom_values", false, FCVAR_NONE, "hide custom CS/AR/OD/HP values in the score list (speed stays visible)");
+ ConVar *OsuUISongBrowserScoreButton::m_osu_scores_sort_by_pp_ref = NULL;
+ ConVar *OsuUISongBrowserScoreButton::m_osu_mods_ref = NULL;
+ ConVar *OsuUISongBrowserScoreButton::m_osu_speed_override_ref = NULL;
+@@ -832,6 +833,10 @@ void OsuUISongBrowserScoreButton::setScore(const OsuDatabase::Score &score, cons
+ 	UString achievedOn = "Achieved on ";
+ 	achievedOn.append(m_sScoreDateTime);
+ 
++	// myosu: optionally hide the custom CS/AR/OD/HP values (keep the speed)
++	if (osu_scores_hide_custom_values.getBool())
++		m_sCustom = (score.speedMultiplier != 1.0f ? UString::format("Spd: %gx", score.speedMultiplier) : "");
++
+ 	// tooltip
+ 	m_tooltipLines.clear();
+ 	m_tooltipLines.push_back(achievedOn);
+-- 
+2.43.0
+
