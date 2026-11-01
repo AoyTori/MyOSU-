@@ -1,0 +1,170 @@
+From aad7fdbbbf3c6da727f7e2dcaa509a5436b38bce Mon Sep 17 00:00:00 2001
+From: myosu <none>
+Date: Sun, 1 Nov 2026 14:49:36 +0100
+Subject: [PATCH] Relax: overlay also clicks on missed notes, option to block
+ own K1/K2 during gameplay
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MvYBfaJwyXivAtVfcZSFtM
+---
+ src/App/Osu/OsuBeatmap.cpp      | 26 ++++++++++++++++++++++++++
+ src/App/Osu/OsuCircle.cpp       |  6 +++---
+ src/App/Osu/OsuOptionsMenu.cpp  |  1 +
+ src/App/Osu/OsuRelaxOverlay.cpp |  8 +++++++-
+ src/App/Osu/OsuSlider.cpp       |  6 +++---
+ 5 files changed, 40 insertions(+), 7 deletions(-)
+
+diff --git a/src/App/Osu/OsuBeatmap.cpp b/src/App/Osu/OsuBeatmap.cpp
+index 076511b..33ca3c7 100644
+--- a/src/App/Osu/OsuBeatmap.cpp
++++ b/src/App/Osu/OsuBeatmap.cpp
+@@ -1194,8 +1194,19 @@ void OsuBeatmap::skipEmptySection()
+ 	engine->getSound()->play(m_osu->getSkin()->getMenuHit());
+ }
+ 
++// myosu: with Relax, your own K1/K2 presses are ignored during gameplay (not in breaks, intro or pause)
++static bool myosuBlockRelaxKeys(Osu *osu, bool playing, bool paused, bool continueScheduled, bool inBreak, bool inSkippableSection)
++{
++	static ConVar *blockKeys = NULL;
++	if (blockKeys == NULL) blockKeys = convar->getConVarByName("osu_relax_block_keys", false);
++	return (blockKeys != NULL && blockKeys->getBool() && osu->getModRelax() && playing && !paused && !continueScheduled && !inBreak && !inSkippableSection);
++}
++
+ void OsuBeatmap::keyPressed1(bool mouse)
+ {
++	if (myosuBlockRelaxKeys(m_osu, m_bIsPlaying, m_bIsPaused, m_bContinueScheduled, m_bInBreak, m_bIsInSkippableSection))
++		return;
++
+ 	if (m_bContinueScheduled)
+ 	{
+ 		if (engine->getTime() < m_fPrevUnpauseTime + osu_unpause_continue_delay.getFloat())
+@@ -1236,6 +1247,9 @@ void OsuBeatmap::keyPressed1(bool mouse)
+ 
+ void OsuBeatmap::keyPressed2(bool mouse)
+ {
++	if (myosuBlockRelaxKeys(m_osu, m_bIsPlaying, m_bIsPaused, m_bContinueScheduled, m_bInBreak, m_bIsInSkippableSection))
++		return;
++
+ 	if (m_bContinueScheduled)
+ 	{
+ 		if (engine->getTime() < m_fPrevUnpauseTime + osu_unpause_continue_delay.getFloat())
+@@ -1276,6 +1290,12 @@ void OsuBeatmap::keyPressed2(bool mouse)
+ 
+ void OsuBeatmap::keyReleased1(bool mouse)
+ {
++	if (myosuBlockRelaxKeys(m_osu, m_bIsPlaying, m_bIsPaused, m_bContinueScheduled, m_bInBreak, m_bIsInSkippableSection))
++	{
++		m_bClick1Held = false;
++		return; // keep the Relax auto clicks in the overlay
++	}
++
+ 	if (m_osu->isInVRMode() && !m_osu_vr_draw_desktop_playfield_ref->getBool()) return;
+ 
+ 	// key overlay
+@@ -1287,6 +1307,12 @@ void OsuBeatmap::keyReleased1(bool mouse)
+ 
+ void OsuBeatmap::keyReleased2(bool mouse)
+ {
++	if (myosuBlockRelaxKeys(m_osu, m_bIsPlaying, m_bIsPaused, m_bContinueScheduled, m_bInBreak, m_bIsInSkippableSection))
++	{
++		m_bClick2Held = false;
++		return; // keep the Relax auto clicks in the overlay
++	}
++
+ 	if (m_osu->isInVRMode() && !m_osu_vr_draw_desktop_playfield_ref->getBool()) return;
+ 
+ 	// key overlay
+diff --git a/src/App/Osu/OsuCircle.cpp b/src/App/Osu/OsuCircle.cpp
+index 5bf4430..f86b0a5 100644
+--- a/src/App/Osu/OsuCircle.cpp
++++ b/src/App/Osu/OsuCircle.cpp
+@@ -930,6 +930,9 @@ void OsuCircle::update(long curPos)
+ 			{
+ 				if (curPos >= m_iTime + (long)m_osu_relax_offset_ref->getInt() && !m_beatmap->isPaused() && !m_beatmap->isContinueScheduled())
+ 				{
++					if (m_beatmap->getOsu()->getModRelax())
++						OsuRelaxOverlay::onAutoClick(m_beatmap->getOsu(), m_iTime, 0); // myosu: also on misses
++
+ 					const Vector2 pos = m_beatmap->osuCoords2Pixels(m_vRawPos);
+ 					const float cursorDelta = (m_beatmap->getCursorPos() - pos).length();
+ 
+@@ -951,9 +954,6 @@ void OsuCircle::update(long curPos)
+ 
+ 						if (result != OsuScore::HIT::HIT_NULL)
+ 						{
+-							if (m_beatmap->getOsu()->getModRelax())
+-								OsuRelaxOverlay::onAutoClick(m_beatmap->getOsu(), m_iTime, 0); // myosu
+-
+ 							const float targetDelta = cursorDelta / (m_beatmap->getHitcircleDiameter()/2.0f);
+ 							const float targetAngle = rad2deg(atan2(m_beatmap->getCursorPos().y - pos.y, m_beatmap->getCursorPos().x - pos.x));
+ 
+diff --git a/src/App/Osu/OsuOptionsMenu.cpp b/src/App/Osu/OsuOptionsMenu.cpp
+index b648916..9dec81a 100644
+--- a/src/App/Osu/OsuOptionsMenu.cpp
++++ b/src/App/Osu/OsuOptionsMenu.cpp
+@@ -1046,6 +1046,7 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
+ 	addCheckbox("Show approach circle on first \"Hidden\" object", convar->getConVarByName("osu_show_approach_circle_on_first_hidden_object"));
+ 	addCheckbox("SuddenDeath restart on miss", "Skips the failing animation, and instantly restarts like SS/PF.", convar->getConVarByName("osu_mod_suddendeath_restart"));
+ 	addCheckbox("Relax", "Play with Relax (no clicking needed) as a permanent option.\nIt is not a mod, and \"Reset All Mods\" won't turn it off.", convar->getConVarByName("osu_relax_option"));
++	addCheckbox("Relax: block my K1/K2 during gameplay", "Your own key presses are ignored while playing with Relax (still work in breaks, intro and pause).", convar->getConVarByName("osu_relax_block_keys"));
+ 	addCheckbox("Relax: show auto clicks in key overlay", "Like lazer: the key overlay presses along when Relax hits a note.", convar->getConVarByName("osu_relax_overlay_autoclick"));
+ 	{
+ 		CBaseUISlider *npsSlider = addSlider("Alternate K1/K2 from notes/sec:", 1.0f, 20.0f, convar->getConVarByName("osu_relax_overlay_alternate_nps"));
+diff --git a/src/App/Osu/OsuRelaxOverlay.cpp b/src/App/Osu/OsuRelaxOverlay.cpp
+index f2a3f57..5663441 100644
+--- a/src/App/Osu/OsuRelaxOverlay.cpp
++++ b/src/App/Osu/OsuRelaxOverlay.cpp
+@@ -17,6 +17,7 @@
+ #include "OsuScore.h"
+ 
+ ConVar osu_relax_overlay_autoclick("osu_relax_overlay_autoclick", true, FCVAR_NONE, "with Relax, show the automatic clicks in the key overlay (like lazer)");
++ConVar osu_relax_block_keys("osu_relax_block_keys", true, FCVAR_NONE, "with Relax, ignore your own K1/K2 presses during gameplay (allowed in breaks, intro and pause)");
+ ConVar osu_relax_overlay_alternate_nps("osu_relax_overlay_alternate_nps", 5.0f, FCVAR_NONE, "notes per second from which the Relax key overlay alternates K1/K2 (below: single tap K1)");
+ 
+ namespace
+@@ -38,12 +39,17 @@ void OsuRelaxOverlay::onAutoClick(Osu *osu, long hitTimeMS, long holdDurationMS)
+ {
+ 	if (osu == NULL || !osu_relax_overlay_autoclick.getBool()) return;
+ 
++	// already clicked for this note (called every frame until the note is finished)
++	if (hitTimeMS == g_lastClickTime) return;
++
+ 	// new attempt / seeking backwards
+-	if (g_lastClickTime < 0 || hitTimeMS < g_lastClickTime)
++	if (g_lastClickTime >= 0 && hitTimeMS < g_lastClickTime - 1000)
+ 	{
+ 		g_lastClickTime = -1;
+ 		g_lastKey = 2;
+ 	}
++	else if (hitTimeMS < g_lastClickTime)
++		return; // older note finishing late, already shown
+ 
+ 	// single tap below the threshold, alternate above it
+ 	const float nps = osu_relax_overlay_alternate_nps.getFloat();
+diff --git a/src/App/Osu/OsuSlider.cpp b/src/App/Osu/OsuSlider.cpp
+index a5b8969..3cd222c 100644
+--- a/src/App/Osu/OsuSlider.cpp
++++ b/src/App/Osu/OsuSlider.cpp
+@@ -1562,6 +1562,9 @@ void OsuSlider::update(long curPos)
+ 			{
+ 				if (curPos >= m_iTime + (long)m_osu_relax_offset_ref->getInt() && !m_beatmap->isPaused() && !m_beatmap->isContinueScheduled())
+ 				{
++					if (m_beatmap->getOsu()->getModRelax())
++						OsuRelaxOverlay::onAutoClick(m_beatmap->getOsu(), m_iTime, getDuration()); // myosu: also on misses
++
+ 					const Vector2 pos = m_beatmap->osuCoords2Pixels(m_curve->pointAt(0.0f));
+ 					const float cursorDelta = (m_beatmap->getCursorPos() - pos).length();
+ 
+@@ -1583,9 +1586,6 @@ void OsuSlider::update(long curPos)
+ 
+ 						if (result != OsuScore::HIT::HIT_NULL)
+ 						{
+-							if (m_beatmap->getOsu()->getModRelax())
+-								OsuRelaxOverlay::onAutoClick(m_beatmap->getOsu(), m_iTime, getDuration()); // myosu
+-
+ 							const float targetDelta = cursorDelta / (m_beatmap->getHitcircleDiameter()/2.0f);
+ 							const float targetAngle = rad2deg(atan2(m_beatmap->getCursorPos().y - pos.y, m_beatmap->getCursorPos().x - pos.x));
+ 
+-- 
+2.43.0
+
