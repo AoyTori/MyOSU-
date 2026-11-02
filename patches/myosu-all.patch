@@ -1803,10 +1803,10 @@ index a8a5508..f1cd771 100644
  	if (m_osu->getInstanceID() < 1)
 diff --git a/src/App/Osu/OsuPCoreAffinity.cpp b/src/App/Osu/OsuPCoreAffinity.cpp
 new file mode 100644
-index 0000000..cc07977
+index 0000000..b1ed0bf
 --- /dev/null
 +++ b/src/App/Osu/OsuPCoreAffinity.cpp
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,85 @@
 +//================ myosu: run on the performance cores ================//
 +//
 +// Purpose:		on hybrid Intel CPUs (P-cores + E-cores) the game thread can end up
@@ -1845,8 +1845,10 @@ index 0000000..cc07977
 +	if (!GetLogicalProcessorInformationEx(RelationProcessorCore, (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buffer.data(), &length))
 +		return;
 +
-+	// first pass: highest efficiency class (= fastest cores), second pass: their mask
++	// first pass: lowest/highest efficiency class, second pass: mask of every core above the lowest class
++	// (= all P-cores; some CPUs give their "favored" P-cores an even higher class, so don't only take the highest)
 +	int maxClass = -1;
++	int minClass = 1000;
 +	for (int pass=0; pass<2; pass++)
 +	{
 +		DWORD_PTR mask = 0;
@@ -1865,8 +1867,9 @@ index 0000000..cc07977
 +				if (pass == 0)
 +				{
 +					if (efficiencyClass > maxClass) maxClass = efficiencyClass;
++					if (efficiencyClass < minClass) minClass = efficiencyClass;
 +				}
-+				else if (efficiencyClass == maxClass && info->Processor.GroupCount > 0 && info->Processor.GroupMask[0].Group == 0)
++				else if (efficiencyClass > minClass && info->Processor.GroupCount > 0 && info->Processor.GroupMask[0].Group == 0)
 +				{
 +					mask |= (DWORD_PTR)info->Processor.GroupMask[0].Mask;
 +					numCores++;
@@ -1879,7 +1882,7 @@ index 0000000..cc07977
 +		{
 +			// only on hybrid CPUs (all cores in the same class = nothing to do)
 +			DWORD_PTR processMask = 0, systemMask = 0;
-+			if (maxClass <= 0 || numCores == 0 || mask == 0) return;
++			if (maxClass <= minClass || numCores == 0 || mask == 0) return;
 +			if (!GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask)) return;
 +			mask &= systemMask;
 +			if (mask == 0 || mask == systemMask) return;
