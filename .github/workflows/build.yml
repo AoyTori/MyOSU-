@@ -47,6 +47,13 @@ jobs:
           sed -i 's|^#include "FrameworkTest.h"|//#include "FrameworkTest.h"|' "$E"
           sed -i 's|//m_app = new Osu();|m_app = new Osu();|' "$E"
           sed -i 's|^\(\s*\)m_app = new FrameworkTest();|\1//m_app = new FrameworkTest();|' "$E"
+          # DirectX 11 renderer (like the official McOsu); start with -opengl to get the old renderer back
+          F=McEngine/McEngine/src/Engine/Main/EngineFeatures.h
+          sed -i 's|^//#define MCENGINE_FEATURE_DIRECTX11|#define MCENGINE_FEATURE_DIRECTX11|' "$F"
+          grep -q '^#define MCENGINE_FEATURE_DIRECTX11' "$F"
+          W=McEngine/McEngine/src/Engine/Platform/WinEnvironment.cpp
+          sed -i 's|^\treturn new WinGLLegacyInterface(m_hwnd);|\tif (engine->getArgs().find("-opengl") == -1) return new DirectX11Interface(m_hwnd);\n\treturn new WinGLLegacyInterface(m_hwnd);|' "$W"
+          grep -q 'find("-opengl")' "$W"
           cd McEngine/McEngine/src/App
           rm -rf FrameworkTest Asteroids Tetris GUICoherenceMode UIFrameworkTest
 
