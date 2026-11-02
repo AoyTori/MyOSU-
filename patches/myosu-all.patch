@@ -2537,6 +2537,46 @@ index 125d472..3cd222c 100644
  					const Vector2 pos = m_beatmap->osuCoords2Pixels(m_curve->pointAt(0.0f));
  					const float cursorDelta = (m_beatmap->getCursorPos() - pos).length();
  
+diff --git a/src/App/Osu/OsuSliderRenderer.cpp b/src/App/Osu/OsuSliderRenderer.cpp
+index dda11f8..a980f88 100644
+--- a/src/App/Osu/OsuSliderRenderer.cpp
++++ b/src/App/Osu/OsuSliderRenderer.cpp
+@@ -7,6 +7,8 @@
+ 
+ #include "OsuSliderRenderer.h"
+ 
++#include <cmath>
++
+ #include "Engine.h"
+ #include "Shader.h"
+ #include "VertexArrayObject.h"
+@@ -42,6 +44,7 @@ float OsuSliderRenderer::m_fBoundingBoxMaxX = 0.0f;
+ float OsuSliderRenderer::m_fBoundingBoxMinY = std::numeric_limits<float>::max();
+ float OsuSliderRenderer::m_fBoundingBoxMaxY = 0.0f;
+ 
++ConVar osu_slider_dx11_zflip("osu_slider_dx11_zflip", false, FCVAR_NONE, "myosu: flip slider cone depth for DirectX 11 (try this if sliders look broken)");
+ ConVar osu_slider_debug_draw("osu_slider_debug_draw", false, FCVAR_NONE, "draw hitcircle at every curve point and nothing else (no vao, no rt, no shader, nothing) (requires enabling legacy slider renderer)");
+ ConVar osu_slider_debug_draw_square_vao("osu_slider_debug_draw_square_vao", false, FCVAR_NONE, "generate square vaos and nothing else (no rt, no shader) (requires disabling legacy slider renderer)");
+ ConVar osu_slider_debug_wireframe("osu_slider_debug_wireframe", false, FCVAR_NONE, "unused");
+@@ -801,9 +804,15 @@ void OsuSliderRenderer::checkUpdateVars(Osu *osu, float hitcircleDiameter)
+ 		DirectX11Interface *dx11 = dynamic_cast<DirectX11Interface*>(engine->getGraphics());
+ 		if (dx11 != NULL)
+ 		{
+-			// NOTE: compensate for zflip
+-			if (MESH_CENTER_HEIGHT > 0.0f)
+-				MESH_CENTER_HEIGHT = -MESH_CENTER_HEIGHT;
++			// myosu: the public engine's test DX11 renderer uses the same depth direction as OpenGL,
++			// so by default don't flip (osu_slider_dx11_zflip 1 restores the original behaviour)
++			static ConVar *zflip = convar->getConVarByName("osu_slider_dx11_zflip");
++			const float wantedHeight = (zflip->getBool() ? -1.0f : 1.0f) * std::abs(MESH_CENTER_HEIGHT);
++			if (wantedHeight != MESH_CENTER_HEIGHT)
++			{
++				MESH_CENTER_HEIGHT = wantedHeight;
++				UNIT_CIRCLE_SUBDIVISIONS = 0; // rebuild the cone mesh
++			}
+ 		}
+ 	}
+ 
 diff --git a/src/App/Osu/OsuSongBrowser2.cpp b/src/App/Osu/OsuSongBrowser2.cpp
 index 4fc910e..dc4b2e3 100644
 --- a/src/App/Osu/OsuSongBrowser2.cpp
