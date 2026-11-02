@@ -310,10 +310,10 @@ index 0000000..a5a8ea0
 +#endif
 diff --git a/src/App/Osu/OsuBanchoApi.cpp b/src/App/Osu/OsuBanchoApi.cpp
 new file mode 100644
-index 0000000..85351cd
+index 0000000..9fb96e2
 --- /dev/null
 +++ b/src/App/Osu/OsuBanchoApi.cpp
-@@ -0,0 +1,938 @@
+@@ -0,0 +1,937 @@
 +//================ myosu: osu! API v2 (read-only, offline client) ================//
 +//
 +// Purpose:		estimates where the local (offline) pp would rank on Bancho by
@@ -768,15 +768,14 @@ index 0000000..85351cd
 +						pos = findKey(response, i, "score");
 +						if (pos != std::string::npos) legacyScore = std::strtoull(rawValueAt(response, pos).c_str(), NULL, 10);
 +					}
-+					if (legacyScore > 0)
-+						sc.score = legacyScore;
-+					else
++					// lazer-only scores have no classic score: leave them out instead of guessing one
++					if (legacyScore == 0)
 +					{
-+						pos = findKey(response, i, "total_score");
-+						const double standardised = (pos != std::string::npos ? std::atof(rawValueAt(response, pos).c_str()) : 0.0);
-+						const double objectCount = (double)(sc.num300s + sc.num100s + sc.num50s + sc.numMisses);
-+						sc.score = (unsigned long long)std::round(((objectCount*objectCount*32.57 + 100000.0) * standardised) / 1000000.0);
++						i = skipWs(response, skipValue(response, i));
++						if (i < response.size() && response[i] == ',') i = skipWs(response, i + 1);
++						continue;
 +					}
++					sc.score = legacyScore;
 +
 +					sc.comboMax = intField(response, i, "max_combo");
 +					pos = findKey(response, i, "perfect");
