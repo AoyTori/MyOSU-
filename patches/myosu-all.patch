@@ -1634,7 +1634,7 @@ index 1d43a78..b9844ae 100644
  		m_modButtonAutopilot->click();
  	if (key == (KEYCODE)OsuKeyBindings::MOD_SPUNOUT.getInt())
 diff --git a/src/App/Osu/OsuOptionsMenu.cpp b/src/App/Osu/OsuOptionsMenu.cpp
-index a8a5508..c80dc7a 100644
+index a8a5508..338957c 100644
 --- a/src/App/Osu/OsuOptionsMenu.cpp
 +++ b/src/App/Osu/OsuOptionsMenu.cpp
 @@ -25,6 +25,7 @@
@@ -1666,7 +1666,7 @@ index a8a5508..c80dc7a 100644
 +	std::transform(filter.begin(), filter.end(), filter.begin(), [](unsigned char c) {return (char)std::tolower(c);});
 +	return name.find(filter) != std::string::npos;
 +}
-+static CBaseUITextbox *g_myosuApiTextboxes[4] = {NULL, NULL, NULL, NULL}; // myosu
++static CBaseUITextbox *g_myosuApiTextboxes[5] = {NULL, NULL, NULL, NULL, NULL}; // myosu
  
  ConVar osu_options_save_on_back("osu_options_save_on_back", true, FCVAR_NONE);
  ConVar osu_options_high_quality_sliders("osu_options_high_quality_sliders", false, FCVAR_NONE);
@@ -1697,17 +1697,19 @@ index a8a5508..c80dc7a 100644
  	addCheckbox("Show pp instead of score in scorebrowser", "Only McOsu scores and manually imported scores will show pp.\nSee Songbrowser > User Button > Top Ranks > Gear Button > \"Import osu! scores of <NAME>\".", convar->getConVarByName("osu_scores_sort_by_pp"));
  	addCheckbox("Always enable touch device pp nerf mod", "Keep touch device pp nerf mod active even when resetting all mods.", convar->getConVarByName("osu_mod_touchdevice"));
  	addCheckbox("Show osu! scores.db user names in user switcher", "Only relevant if \"Load osu! scores.db\" is enabled.\nShould the user switcher show ALL user names from ALL scores?\n(Even from ones you got in your database because you watched a replay?)", convar->getConVarByName("osu_user_switcher_include_legacy_scores_for_names"));
-@@ -615,7 +652,8 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
+@@ -615,7 +652,10 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
  	addCheckbox("VSync", "If enabled: plz enjoy input lag.", convar->getConVarByName("vsync"));
  
  	if (env->getOS() == Environment::OS::OS_WINDOWS)
 -		addCheckbox("High Priority (!)", "WARNING: Only enable this if nothing else works!\nSets the process priority to High.\nMay fix microstuttering and other weird problems.\nTry to fix your broken computer/OS/drivers first!", convar->getConVarByName("win_processpriority"));
-+		addCheckbox("Run on P-cores only (hybrid CPUs)", "Intel CPUs with P- and E-cores: the game only uses the fast P-cores.\nApplied at startup (restart after changing).", convar->getConVarByName("osu_pcore_affinity"));
++		addCheckbox("Realtime priority (!)", "Runs the game with realtime priority (like in the task manager).\nOnly works when MyOsu is started as administrator, otherwise it is \"high\".\nCan make mouse/keyboard/audio laggy on some systems. Restart after changing.", convar->getConVarByName("osu_process_priority_realtime"));
++	addCheckbox("Limit CPU cores", "Only use the CPUs below (like \"Set affinity\" in the task manager).\nApplied at startup (restart after changing).", convar->getConVarByName("osu_pcore_affinity"));
++	g_myosuApiTextboxes[4] = addTextbox(convar->getConVarByName("osu_cpu_affinity")->getString(), "CPUs (e.g. 0-5):", convar->getConVarByName("osu_cpu_affinity"));
 +	addCheckbox("High Priority (!)", "WARNING: Only enable this if nothing else works!\nSets the process priority to High.\nMay fix microstuttering and other weird problems.\nTry to fix your broken computer/OS/drivers first!", convar->getConVarByName("win_processpriority"));
  
  	addCheckbox("Show FPS Counter", convar->getConVarByName("osu_draw_fps"));
  	if (env->getOS() != Environment::OS::OS_HORIZON)
-@@ -835,6 +873,7 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
+@@ -835,6 +875,7 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
  
  	addSubSection("Skin");
  	addSkinPreview();
@@ -1715,7 +1717,7 @@ index a8a5508..c80dc7a 100644
  	{
  		OPTIONS_ELEMENT skinSelect;
  		if (steam->isReady())
-@@ -1025,6 +1064,16 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
+@@ -1025,6 +1066,16 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
  	addCheckbox("Don't change dim level during breaks", "Makes the background basically impossible to see during breaks.\nNot recommended.", convar->getConVarByName("osu_background_dont_fade_during_breaks"));
  	addCheckbox("Show approach circle on first \"Hidden\" object", convar->getConVarByName("osu_show_approach_circle_on_first_hidden_object"));
  	addCheckbox("SuddenDeath restart on miss", "Skips the failing animation, and instantly restarts like SS/PF.", convar->getConVarByName("osu_mod_suddendeath_restart"));
@@ -1732,16 +1734,16 @@ index a8a5508..c80dc7a 100644
  	addCheckbox("Show Skip Button during Intro", "Skip intro to first hitobject.", convar->getConVarByName("osu_skip_intro_enabled"));
  	addCheckbox("Show Skip Button during Breaks", "Skip breaks in the middle of beatmaps.", convar->getConVarByName("osu_skip_breaks_enabled"));
  	addSpacer();
-@@ -1440,6 +1489,23 @@ void OsuOptionsMenu::update()
+@@ -1440,6 +1491,23 @@ void OsuOptionsMenu::update()
  {
  	OsuScreenBackable::update();
  
 +	// myosu: write the osu! API textboxes back into their convars
 +	if (m_bVisible)
 +	{
-+		static const char *apiConVarNames[4] = {"osu_api_country", "osu_api_client_id", "osu_api_client_secret", "osu_api_osudaily_key"};
-+		static ConVar *apiConVars[4] = {NULL, NULL, NULL, NULL};
-+		for (int i=0; i<4; i++)
++		static const char *apiConVarNames[5] = {"osu_api_country", "osu_api_client_id", "osu_api_client_secret", "osu_api_osudaily_key", "osu_cpu_affinity"};
++		static ConVar *apiConVars[5] = {NULL, NULL, NULL, NULL, NULL};
++		for (int i=0; i<5; i++)
 +		{
 +			if (g_myosuApiTextboxes[i] == NULL) continue;
 +			if (apiConVars[i] == NULL) apiConVars[i] = convar->getConVarByName(apiConVarNames[i]);
@@ -1756,7 +1758,7 @@ index a8a5508..c80dc7a 100644
  	// workshop background refresh takes some time, open context menu after loading is finished
  	// do this even if options menu is invisible (but only show context menu if visible after finished)
  	if (m_bWorkshopSkinSelectScheduled)
-@@ -2583,19 +2649,27 @@ void OsuOptionsMenu::onSkinSelect()
+@@ -2583,19 +2651,27 @@ void OsuOptionsMenu::onSkinSelect()
  		m_contextMenu->begin();
  
  		const UString defaultText = "default";
@@ -1790,7 +1792,7 @@ index a8a5508..c80dc7a 100644
  
  			CBaseUIButton *button = m_contextMenu->addButton(skinFolders[i]);
  			if (skinFolders[i] == m_osu_skin_ref->getString())
-@@ -2614,6 +2688,7 @@ void OsuOptionsMenu::onSkinSelect()
+@@ -2614,6 +2690,7 @@ void OsuOptionsMenu::onSkinSelect()
  
  void OsuOptionsMenu::onSkinSelect2(UString skinName, int id)
  {
@@ -1800,10 +1802,10 @@ index a8a5508..c80dc7a 100644
  	if (m_osu->getInstanceID() < 1)
 diff --git a/src/App/Osu/OsuPCoreAffinity.cpp b/src/App/Osu/OsuPCoreAffinity.cpp
 new file mode 100644
-index 0000000..b1ed0bf
+index 0000000..705ca56
 --- /dev/null
 +++ b/src/App/Osu/OsuPCoreAffinity.cpp
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,129 @@
 +//================ myosu: run on the performance cores ================//
 +//
 +// Purpose:		on hybrid Intel CPUs (P-cores + E-cores) the game thread can end up
@@ -1819,7 +1821,10 @@ index 0000000..b1ed0bf
 +
 +#include <windows.h>
 +#include <vector>
++#include <string>
 +
++ConVar osu_process_priority_realtime("osu_process_priority_realtime", false, FCVAR_NONE, "run the game with realtime priority (needs admin rights, otherwise Windows uses high), applied at startup");
++ConVar osu_cpu_affinity("osu_cpu_affinity", "0-5", FCVAR_NONE, "CPUs the game may use, like in the task manager, e.g. \"0-5\" or \"0,1,4-7\" (empty = automatic P-core detection), applied at startup");
 +ConVar osu_pcore_affinity("osu_pcore_affinity", true, FCVAR_NONE, "on hybrid CPUs, only run on the performance cores (P-cores), applied at startup");
 +
 +namespace
@@ -1832,7 +1837,48 @@ index 0000000..b1ed0bf
 +	if (g_bApplied) return;
 +	g_bApplied = true;
 +
++	// realtime priority (Windows silently falls back to high without admin rights)
++	if (osu_process_priority_realtime.getBool())
++		SetPriorityClass(GetCurrentProcess(), REALTIME_PRIORITY_CLASS);
++
 +	if (!osu_pcore_affinity.getBool()) return;
++
++	// manual CPU list (same numbers as in the task manager)
++	{
++		const std::string list = std::string(osu_cpu_affinity.getString().toUtf8());
++		DWORD_PTR manualMask = 0;
++		size_t i = 0;
++		while (i < list.size())
++		{
++			while (i < list.size() && (list[i] < '0' || list[i] > '9')) i++;
++			if (i >= list.size()) break;
++			int from = 0;
++			while (i < list.size() && list[i] >= '0' && list[i] <= '9') from = from*10 + (list[i++] - '0');
++			int to = from;
++			while (i < list.size() && list[i] == ' ') i++;
++			if (i < list.size() && list[i] == '-')
++			{
++				i++;
++				while (i < list.size() && list[i] == ' ') i++;
++				to = 0;
++				while (i < list.size() && list[i] >= '0' && list[i] <= '9') to = to*10 + (list[i++] - '0');
++			}
++			for (int cpu = from; cpu <= to && cpu < (int)(sizeof(DWORD_PTR)*8); cpu++)
++				manualMask |= ((DWORD_PTR)1 << cpu);
++		}
++
++		if (manualMask != 0)
++		{
++			DWORD_PTR processMask = 0, systemMask = 0;
++			if (GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask))
++			{
++				manualMask &= systemMask;
++				if (manualMask != 0 && SetProcessAffinityMask(GetCurrentProcess(), manualMask))
++					debugLog("myosu: affinity set to \"%s\"\n", list.c_str());
++			}
++			return;
++		}
++	}
 +
 +	DWORD length = 0;
 +	GetLogicalProcessorInformationEx(RelationProcessorCore, NULL, &length);
