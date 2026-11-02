@@ -54,6 +54,12 @@ jobs:
           W=McEngine/McEngine/src/Engine/Platform/WinEnvironment.cpp
           sed -i 's|^\treturn new WinGLLegacyInterface(m_hwnd);|\tif (engine->getArgs().find("-opengl") == -1) return new DirectX11Interface(m_hwnd);\n\treturn new WinGLLegacyInterface(m_hwnd);|' "$W"
           grep -q 'find("-opengl")' "$W"
+          # own shader folder, so the (newer) shaders of the official McOsu in the same folder are not used
+          R=McEngine/McEngine/src/Engine/ResourceManager.cpp
+          sed -i 's|PATH_DEFAULT_SHADERS = "shaders/";|PATH_DEFAULT_SHADERS = "myosu_shaders/";|' "$R"
+          grep -q '"myosu_shaders/"' "$R"
+          mkdir -p myosu_shaders
+          cp McOsu/build/shaders/* myosu_shaders/
           cd McEngine/McEngine/src/App
           rm -rf FrameworkTest Asteroids Tetris GUICoherenceMode UIFrameworkTest
 
@@ -82,6 +88,8 @@ jobs:
           mkdir -p dist
           cp out/${{ matrix.variant }}.exe dist/
           cp build/*.dll dist/
+          mkdir -p dist/myosu_shaders
+          cp ../../myosu_shaders/* dist/myosu_shaders/
           for dll in libwinpthread-1.dll libatomic-1.dll libgcc_s_dw2-1.dll libstdc++-6.dll; do
             if [ -f "/mingw32/bin/$dll" ]; then cp "/mingw32/bin/$dll" dist/; fi
           done
@@ -90,5 +98,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.variant }}-exe
-          path: McEngine/McEngine/dist/*
+          path: McEngine/McEngine/dist/
           if-no-files-found: error
