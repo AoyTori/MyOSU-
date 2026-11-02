@@ -1634,7 +1634,7 @@ index 1d43a78..b9844ae 100644
  		m_modButtonAutopilot->click();
  	if (key == (KEYCODE)OsuKeyBindings::MOD_SPUNOUT.getInt())
 diff --git a/src/App/Osu/OsuOptionsMenu.cpp b/src/App/Osu/OsuOptionsMenu.cpp
-index a8a5508..f1cd771 100644
+index a8a5508..c80dc7a 100644
 --- a/src/App/Osu/OsuOptionsMenu.cpp
 +++ b/src/App/Osu/OsuOptionsMenu.cpp
 @@ -25,6 +25,7 @@
@@ -1645,7 +1645,7 @@ index a8a5508..f1cd771 100644
  
  #include "Osu.h"
  #include "OsuVR.h"
-@@ -49,6 +50,23 @@
+@@ -49,6 +50,24 @@
  
  #include <iostream>
  #include <fstream>
@@ -1654,13 +1654,14 @@ index a8a5508..f1cd771 100644
 +
 +
 +// myosu: skin search (type in the box at the top of the skin list, Enter filters)
-+static UString g_myosuSkinFilter;
-+static const int MYOSU_SKIN_SEARCH_ID = 4242;
++static CBaseUITextbox *g_myosuSkinSearchBox = NULL;
 +static bool myosuSkinMatches(const UString &skinName)
 +{
-+	if (g_myosuSkinFilter.length() < 1) return true;
++	if (g_myosuSkinSearchBox == NULL) return true;
++	const UString filterText = g_myosuSkinSearchBox->getText().trim();
++	if (filterText.length() < 1) return true;
 +	std::string name = std::string(skinName.toUtf8());
-+	std::string filter = std::string(g_myosuSkinFilter.toUtf8());
++	std::string filter = std::string(filterText.toUtf8());
 +	std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {return (char)std::tolower(c);});
 +	std::transform(filter.begin(), filter.end(), filter.begin(), [](unsigned char c) {return (char)std::tolower(c);});
 +	return name.find(filter) != std::string::npos;
@@ -1669,7 +1670,7 @@ index a8a5508..f1cd771 100644
  
  ConVar osu_options_save_on_back("osu_options_save_on_back", true, FCVAR_NONE);
  ConVar osu_options_high_quality_sliders("osu_options_high_quality_sliders", false, FCVAR_NONE);
-@@ -592,8 +610,26 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
+@@ -592,8 +611,26 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
  	addSubSection("Player (Name)");
  	m_nameTextbox = addTextbox(convar->getConVarByName("name")->getString(), convar->getConVarByName("name"));
  	addSpacer();
@@ -1696,7 +1697,7 @@ index a8a5508..f1cd771 100644
  	addCheckbox("Show pp instead of score in scorebrowser", "Only McOsu scores and manually imported scores will show pp.\nSee Songbrowser > User Button > Top Ranks > Gear Button > \"Import osu! scores of <NAME>\".", convar->getConVarByName("osu_scores_sort_by_pp"));
  	addCheckbox("Always enable touch device pp nerf mod", "Keep touch device pp nerf mod active even when resetting all mods.", convar->getConVarByName("osu_mod_touchdevice"));
  	addCheckbox("Show osu! scores.db user names in user switcher", "Only relevant if \"Load osu! scores.db\" is enabled.\nShould the user switcher show ALL user names from ALL scores?\n(Even from ones you got in your database because you watched a replay?)", convar->getConVarByName("osu_user_switcher_include_legacy_scores_for_names"));
-@@ -615,7 +651,8 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
+@@ -615,7 +652,8 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
  	addCheckbox("VSync", "If enabled: plz enjoy input lag.", convar->getConVarByName("vsync"));
  
  	if (env->getOS() == Environment::OS::OS_WINDOWS)
@@ -1706,7 +1707,15 @@ index a8a5508..f1cd771 100644
  
  	addCheckbox("Show FPS Counter", convar->getConVarByName("osu_draw_fps"));
  	if (env->getOS() != Environment::OS::OS_HORIZON)
-@@ -1025,6 +1062,16 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
+@@ -835,6 +873,7 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
+ 
+ 	addSubSection("Skin");
+ 	addSkinPreview();
++	g_myosuSkinSearchBox = addTextbox("", "Skin search:", NULL); // myosu: filters the skin list below
+ 	{
+ 		OPTIONS_ELEMENT skinSelect;
+ 		if (steam->isReady())
+@@ -1025,6 +1064,16 @@ OsuOptionsMenu::OsuOptionsMenu(Osu *osu) : OsuScreenBackable(osu)
  	addCheckbox("Don't change dim level during breaks", "Makes the background basically impossible to see during breaks.\nNot recommended.", convar->getConVarByName("osu_background_dont_fade_during_breaks"));
  	addCheckbox("Show approach circle on first \"Hidden\" object", convar->getConVarByName("osu_show_approach_circle_on_first_hidden_object"));
  	addCheckbox("SuddenDeath restart on miss", "Skips the failing animation, and instantly restarts like SS/PF.", convar->getConVarByName("osu_mod_suddendeath_restart"));
@@ -1723,7 +1732,7 @@ index a8a5508..f1cd771 100644
  	addCheckbox("Show Skip Button during Intro", "Skip intro to first hitobject.", convar->getConVarByName("osu_skip_intro_enabled"));
  	addCheckbox("Show Skip Button during Breaks", "Skip breaks in the middle of beatmaps.", convar->getConVarByName("osu_skip_breaks_enabled"));
  	addSpacer();
-@@ -1440,6 +1487,23 @@ void OsuOptionsMenu::update()
+@@ -1440,6 +1489,23 @@ void OsuOptionsMenu::update()
  {
  	OsuScreenBackable::update();
  
@@ -1747,13 +1756,9 @@ index a8a5508..f1cd771 100644
  	// workshop background refresh takes some time, open context menu after loading is finished
  	// do this even if options menu is invisible (but only show context menu if visible after finished)
  	if (m_bWorkshopSkinSelectScheduled)
-@@ -2582,20 +2646,31 @@ void OsuOptionsMenu::onSkinSelect()
- 		m_contextMenu->setRelPos(m_skinSelectLocalButton->getRelPos());
+@@ -2583,19 +2649,27 @@ void OsuOptionsMenu::onSkinSelect()
  		m_contextMenu->begin();
  
-+		// myosu: search box, type and press Enter (empty + Enter shows all skins again)
-+		m_contextMenu->addTextbox(g_myosuSkinFilter, MYOSU_SKIN_SEARCH_ID);
-+
  		const UString defaultText = "default";
 -		CBaseUIButton *buttonDefault = m_contextMenu->addButton(defaultText);
 -		if (defaultText == m_osu_skin_ref->getString())
@@ -1785,17 +1790,10 @@ index a8a5508..f1cd771 100644
  
  			CBaseUIButton *button = m_contextMenu->addButton(skinFolders[i]);
  			if (skinFolders[i] == m_osu_skin_ref->getString())
-@@ -2614,6 +2689,14 @@ void OsuOptionsMenu::onSkinSelect()
+@@ -2614,6 +2688,7 @@ void OsuOptionsMenu::onSkinSelect()
  
  void OsuOptionsMenu::onSkinSelect2(UString skinName, int id)
  {
-+	// myosu: Enter in the search box -> show the filtered skin list
-+	if (id == MYOSU_SKIN_SEARCH_ID)
-+	{
-+		g_myosuSkinFilter = skinName.trim();
-+		onSkinSelect();
-+		return;
-+	}
 +
  	m_osu_skin_is_from_workshop_ref->setValue(0.0f);
  
