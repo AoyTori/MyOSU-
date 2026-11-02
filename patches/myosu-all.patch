@@ -1300,7 +1300,7 @@ index 0000000..84e6814
 +
 +#endif
 diff --git a/src/App/Osu/OsuBeatmap.cpp b/src/App/Osu/OsuBeatmap.cpp
-index 076511b..132f78b 100644
+index 076511b..6817243 100644
 --- a/src/App/Osu/OsuBeatmap.cpp
 +++ b/src/App/Osu/OsuBeatmap.cpp
 @@ -26,6 +26,7 @@
@@ -1367,18 +1367,19 @@ index 076511b..132f78b 100644
  	if (m_osu->isInVRMode() && !m_osu_vr_draw_desktop_playfield_ref->getBool()) return;
  
  	// key overlay
-@@ -1863,6 +1890,10 @@ float OsuBeatmap::getAR(bool useAudioLibrarySpeedMultiplierForOverrideLockCalcul
+@@ -1863,6 +1890,11 @@ float OsuBeatmap::getAR(bool useAudioLibrarySpeedMultiplierForOverrideLockCalcul
  		if (osu_ar_overridenegative.getFloat() < 0.0f)
  			AR = osu_ar_overridenegative.getFloat();
  
 +		// myosu: Aoy mode (only while playing, the song browser shows the normal values)
++		// effective AR stays the same with DT/HT (like the AR lock in the mod menu)
 +		if (OsuAoyMode::isActive() && m_osu->isInPlayMode())
-+			AR = OsuAoyMode::getAR();
++			AR = OsuGameRules::getRawConstantApproachRateForSpeedMultiplier(OsuGameRules::getRawApproachTime(OsuAoyMode::getAR()), (m_music != NULL && m_bIsPlaying && useAudioLibrarySpeedMultiplierForOverrideLockCalculationsIfPlaying ? getSpeedMultiplier() : m_osu->getSpeedMultiplier()));
 +
  		if (osu_ar_override_lock.getBool())
  			AR = OsuGameRules::getRawConstantApproachRateForSpeedMultiplier(OsuGameRules::getRawApproachTime(AR), (m_music != NULL && m_bIsPlaying && useAudioLibrarySpeedMultiplierForOverrideLockCalculationsIfPlaying ? getSpeedMultiplier() : m_osu->getSpeedMultiplier()));
  
-@@ -1890,6 +1921,10 @@ float OsuBeatmap::getCS() const
+@@ -1890,6 +1922,10 @@ float OsuBeatmap::getCS() const
  		if (osu_cs_overridenegative.getFloat() < 0.0f)
  			CS = osu_cs_overridenegative.getFloat();
  
@@ -1389,13 +1390,14 @@ index 076511b..132f78b 100644
  		if (osu_mod_minimize.getBool() && m_hitobjects.size() > 0)
  		{
  			if (m_hitobjects.size() > 0)
-@@ -1929,6 +1964,10 @@ float OsuBeatmap::getOD(bool useAudioLibrarySpeedMultiplierForOverrideLockCalcul
+@@ -1929,6 +1965,11 @@ float OsuBeatmap::getOD(bool useAudioLibrarySpeedMultiplierForOverrideLockCalcul
  	if (osu_od_override.getFloat() >= 0.0f)
  		OD = osu_od_override.getFloat();
  
 +	// myosu: Aoy mode (only while playing)
++	// effective OD stays the same with DT/HT (like the OD lock in the mod menu)
 +	if (OsuAoyMode::isActive() && m_osu->isInPlayMode())
-+		OD = OsuAoyMode::getOD(m_osu->getModHR());
++		OD = OsuGameRules::getRawConstantOverallDifficultyForSpeedMultiplier(OsuGameRules::getRawHitWindow300(OsuAoyMode::getOD(m_osu->getModHR())), (m_music != NULL && m_bIsPlaying && useAudioLibrarySpeedMultiplierForOverrideLockCalculationsIfPlaying ? getSpeedMultiplier() : m_osu->getSpeedMultiplier()));
 +
  	if (osu_od_override_lock.getBool())
  		OD = OsuGameRules::getRawConstantOverallDifficultyForSpeedMultiplier(OsuGameRules::getRawHitWindow300(OD), (m_music != NULL && m_bIsPlaying && useAudioLibrarySpeedMultiplierForOverrideLockCalculationsIfPlaying ? getSpeedMultiplier() : m_osu->getSpeedMultiplier()));
