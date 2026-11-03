@@ -8,8 +8,17 @@ jobs:
   build:
     runs-on: windows-latest
     strategy:
+      fail-fast: false   # if 64-bit fails, the 32-bit build still finishes
       matrix:
-        variant: [MyOsu, Vanilla]
+        include:
+          - arch: 32
+            msystem: MINGW32
+            pkg: i686
+            mingw: mingw32
+          - arch: 64
+            msystem: MINGW64
+            pkg: x86_64
+            mingw: mingw64
     defaults:
       run:
         shell: msys2 {0}
@@ -18,8 +27,10 @@ jobs:
 
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW32
-          install: mingw-w64-i686-gcc git
+          msystem: ${{ matrix.msystem }}
+          install: >-
+            mingw-w64-${{ matrix.pkg }}-gcc git unzip
+            mingw-w64-${{ matrix.pkg }}-freetype mingw-w64-${{ matrix.pkg }}-glew mingw-w64-${{ matrix.pkg }}-libjpeg-turbo
 
       - name: McEngine + McOsu holen, Patches anwenden
         run: |
@@ -28,9 +39,7 @@ jobs:
           git clone --depth 1 https://github.com/McKay42/McEngine.git
           git clone --depth 1 https://github.com/McKay42/McOsu.git
           cd McOsu
-          if [ "${{ matrix.variant }}" = "Vanilla" ]; then
-            PATCHES=""   # test build: original McOsu, same compiler settings, no myosu patches
-          elif [ -f ../patches/myosu-all.patch ]; then
+          if [ -f ../patches/myosu-all.patch ]; then
             PATCHES="../patches/myosu-all.patch"   # one file with everything, the other patch files are ignored
           else
             PATCHES=$(ls ../patches/*.patch)
@@ -62,6 +71,18 @@ jobs:
           cp McOsu/build/shaders/* myosu_shaders/
           cd McEngine/McEngine/src/App
           rm -rf FrameworkTest Asteroids Tetris GUICoherenceMode UIFrameworkTest
+          cd ../../../..
+          # 64-bit: the engine only ships 32-bit libraries, so get BASS x64 from un4seen
+          if [ "${{ matrix.arch }}" = "64" ]; then
+            mkdir -p bass64
+            curl -fsSL -o bass.zip https://www.un4seen.com/files/bass24.zip
+            curl -fsSL -o bassfx.zip https://www.un4seen.com/files/z/0/bass_fx24.zip
+            unzip -o -q bass.zip -d bass_zip
+            unzip -o -q bassfx.zip -d bassfx_zip
+            cp "$(find bass_zip -ipath '*x64*' -iname bass.dll | head -1)" bass64/bass.dll
+            cp "$(find bassfx_zip -ipath '*x64*' -iname bass_fx.dll | head -1)" bass64/bass_fx.dll
+            ls -la bass64
+          fi
 
       - name: Kompilieren
         run: |
@@ -70,33 +91,52 @@ jobs:
           mkdir -p out
           INC=""
           while IFS= read -r d; do INC="$INC -I$d"; done < <(find src -type d)
-          for d in libraries/*/include; do INC="$INC -I$d"; done
+          if [ "${{ matrix.arch }}" = "64" ]; then
+            # use the MSYS2 freetype/libjpeg headers (they must match the 64-bit libraries)
+            for d in libraries/*/include; do case "$d" in *freetype*|*libjpeg*) ;; *) INC="$INC -I$d";; esac; done
+            INC="$INC -I/mingw64/include/freetype2"
+          else
+            for d in libraries/*/include; do INC="$INC -I$d"; done
+          fi
           export INC
           export FLAGS="-std=c++11 -O3 -march=haswell -mtune=intel -fomit-frame-pointer -c -fmessage-length=0 -w -fpermissive -D__GXX_EXPERIMENTAL_CXX0X__ -D__gl_glext_h_ -D__wgl_wglext_h_ -DWIN32STDMUTEX_H -DQWORD=ULONGLONG"
           : > out/fehler.txt
           find src -name '*.cpp' | xargs -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; g++ $FLAGS $INC -o "$o" "{}" 2> "$o.log" || { echo "{}" >> out/fehler.txt; cat "$o.log"; }'
           find src -name '*.c' | xargs -r -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; gcc -O3 -march=haswell -mtune=intel -fomit-frame-pointer -c -w $INC -o "$o" "{}" 2> "$o.log" || { echo "{}" >> out/fehler.txt; cat "$o.log"; }'
           if [ -s out/fehler.txt ]; then echo "===== FEHLER IN DIESEN DATEIEN ====="; cat out/fehler.txt; exit 1; fi
-          LIBDIRS=""
-          for d in libraries/*/lib/windows; do LIBDIRS="$LIBDIRS -L$d"; done
-          g++ -s -mwindows -static-libgcc -static-libstdc++ -o out/${{ matrix.variant }}.exe out/*.o $LIBDIRS \
-            -logg -lADLMIDI -lmad -lmodplug -lsmpeg -lgme -lvorbis -lopus -lvorbisfile -ldiscord-rpc -lsteam_api \
-            -lSDL2_mixer_ext.dll -lSDL2 -ld3dcompiler_47 -ld3d11 -ldxgi -lopenvr_api -llibcurl -llibxinput9_1_0 \
-            -llibBulletSoftBody -llibBulletDynamics -llibBulletCollision -llibLinearMath -lfreetype -lopengl32 \
-            -lOpenCL -lvulkan-1 -lglew32 -lglu32 -lgdi32 -lbass -lbass_fx -lcomctl32 -lDwmapi -lComdlg32 -lpsapi \
-            -lenet -lws2_32 -lwinhttp -lwinmm -Wl,-Bstatic -lpthread -Wl,-Bdynamic -llibjpeg -llibatomic
+          if [ "${{ matrix.arch }}" = "64" ]; then
+            cp ../../bass64/*.dll out/
+            g++ -s -mwindows -static-libgcc -static-libstdc++ -o out/MyOsu.exe out/*.o out/bass.dll out/bass_fx.dll \
+              -lfreetype -lglew32 -ljpeg -ld3dcompiler_47 -ld3d11 -ldxgi -lopengl32 -lglu32 -lgdi32 \
+              -lcomctl32 -ldwmapi -lcomdlg32 -lpsapi -lws2_32 -lwinhttp -lwinmm -Wl,-Bstatic -lpthread -Wl,-Bdynamic -latomic
+          else
+            LIBDIRS=""
+            for d in libraries/*/lib/windows; do LIBDIRS="$LIBDIRS -L$d"; done
+            g++ -s -mwindows -static-libgcc -static-libstdc++ -o out/MyOsu.exe out/*.o $LIBDIRS \
+              -logg -lADLMIDI -lmad -lmodplug -lsmpeg -lgme -lvorbis -lopus -lvorbisfile -ldiscord-rpc -lsteam_api \
+              -lSDL2_mixer_ext.dll -lSDL2 -ld3dcompiler_47 -ld3d11 -ldxgi -lopenvr_api -llibcurl -llibxinput9_1_0 \
+              -llibBulletSoftBody -llibBulletDynamics -llibBulletCollision -llibLinearMath -lfreetype -lopengl32 \
+              -lOpenCL -lvulkan-1 -lglew32 -lglu32 -lgdi32 -lbass -lbass_fx -lcomctl32 -lDwmapi -lComdlg32 -lpsapi \
+              -lenet -lws2_32 -lwinhttp -lwinmm -Wl,-Bstatic -lpthread -Wl,-Bdynamic -llibjpeg -llibatomic
+          fi
           mkdir -p dist
-          cp out/${{ matrix.variant }}.exe dist/
-          cp build/*.dll dist/
+          cp out/MyOsu.exe dist/
+          if [ "${{ matrix.arch }}" = "64" ]; then
+            cp out/bass.dll out/bass_fx.dll dist/
+            # every MSYS2 DLL the exe needs (freetype + its dependencies, glew, libjpeg, ...)
+            ldd out/MyOsu.exe | awk '/\/mingw64\//{print $3}' | sort -u | xargs -r -I{} cp "{}" dist/ || true
+          else
+            cp build/*.dll dist/
+          fi
           mkdir -p dist/myosu_shaders
           cp ../../myosu_shaders/* dist/myosu_shaders/
-          for dll in libwinpthread-1.dll libatomic-1.dll libgcc_s_dw2-1.dll libstdc++-6.dll; do
-            if [ -f "/mingw32/bin/$dll" ]; then cp "/mingw32/bin/$dll" dist/; fi
+          for dll in libwinpthread-1.dll libatomic-1.dll libgcc_s_dw2-1.dll libgcc_s_seh-1.dll libstdc++-6.dll; do
+            if [ -f "/${{ matrix.mingw }}/bin/$dll" ]; then cp "/${{ matrix.mingw }}/bin/$dll" dist/; fi
           done
           ls -la dist
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.variant }}-exe
+          name: MyOsu-${{ matrix.arch }}bit
           path: McEngine/McEngine/dist/
           if-no-files-found: error
