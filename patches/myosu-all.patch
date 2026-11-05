@@ -1528,6 +1528,18 @@ index 2332e79..f86b0a5 100644
  					const Vector2 pos = m_beatmap->osuCoords2Pixels(m_vRawPos);
  					const float cursorDelta = (m_beatmap->getCursorPos() - pos).length();
  
+diff --git a/src/App/Osu/OsuDifficultyCalculator.cpp b/src/App/Osu/OsuDifficultyCalculator.cpp
+index ad67054..95b33d6 100644
+--- a/src/App/Osu/OsuDifficultyCalculator.cpp
++++ b/src/App/Osu/OsuDifficultyCalculator.cpp
+@@ -238,6 +238,7 @@ float OsuDifficultyHitObject::getT(long pos, bool raw)
+ 
+ ConVar *OsuDifficultyCalculator::m_osu_slider_end_inside_check_offset_ref = NULL;
+ ConVar *OsuDifficultyCalculator::m_osu_slider_curve_max_length_ref = NULL;
++constexpr const double OsuDifficultyCalculator::decay_base[]; // myosu: out-of-class definition (C++11, needed with LTO)
+ 
+ void OsuDifficultyCalculator::DifficultyAttributes::clear()
+ {
 diff --git a/src/App/Osu/OsuHUD.cpp b/src/App/Osu/OsuHUD.cpp
 index 5c30d1a..9163ac1 100644
 --- a/src/App/Osu/OsuHUD.cpp
