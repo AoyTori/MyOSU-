@@ -16,10 +16,10 @@ jobs:
             march: x86-64-v3
             fallback: haswell
             defines: "-DMYOSU_NO_DEFAULT_AFFINITY"
-            msystem: MINGW64
-            pkg: x86_64
-            mingw: mingw64
-            extra: mingw-w64-x86_64-freetype mingw-w64-x86_64-glew mingw-w64-x86_64-libjpeg-turbo
+            msystem: UCRT64
+            pkg: ucrt-x86_64
+            mingw: ucrt64
+            extra: mingw-w64-ucrt-x86_64-freetype mingw-w64-ucrt-x86_64-glew mingw-w64-ucrt-x86_64-libjpeg-turbo mingw-w64-ucrt-x86_64-pkgconf
     defaults:
       run:
         shell: msys2 {0}
@@ -98,7 +98,7 @@ jobs:
           if [ "${{ matrix.arch }}" = "64" ]; then
             # use the MSYS2 freetype/libjpeg headers (they must match the 64-bit libraries)
             for d in libraries/*/include; do case "$d" in *freetype*|*libjpeg*) ;; *) INC="$INC -I$d";; esac; done
-            INC="$INC -I/mingw64/include/freetype2 -I/mingw64/include/freetype2/freetype"
+            INC="$INC -I/${{ matrix.mingw }}/include/freetype2 -I/${{ matrix.mingw }}/include/freetype2/freetype"
           else
             for d in libraries/*/include; do INC="$INC -I$d"; done
           fi
@@ -110,16 +110,23 @@ jobs:
           case "$ARCH" in x86-64*) TUNE=generic;; esac
           echo "CPU target: $ARCH (tune $TUNE)"
           export OPT="-O3 -march=$ARCH -mtune=$TUNE -fomit-frame-pointer -fno-math-errno ${{ matrix.defines }}"
-          export FLAGS="-std=c++11 $OPT -c -fmessage-length=0 -w -fpermissive -D__GXX_EXPERIMENTAL_CXX0X__ -D__gl_glext_h_ -D__wgl_wglext_h_ -DWIN32STDMUTEX_H -DQWORD=ULONGLONG"
+          export FLAGS="-std=c++11 $OPT -c -fmessage-length=0 -w -fpermissive -D__GXX_EXPERIMENTAL_CXX0X__ -D__gl_glext_h_ -D__wgl_wglext_h_ -DWIN32STDMUTEX_H -DQWORD=ULONGLONG -DGLEW_STATIC"
           : > out/fehler.txt
           find src -name '*.cpp' | xargs -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; g++ $FLAGS $INC -o "$o" "{}" 2> "$o.log" || { echo "{}" >> out/fehler.txt; cat "$o.log"; }'
           find src -name '*.c' | xargs -r -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; gcc $OPT -c -w $INC -o "$o" "{}" 2> "$o.log" || { echo "{}" >> out/fehler.txt; cat "$o.log"; }'
           if [ -s out/fehler.txt ]; then echo "===== FEHLER IN DIESEN DATEIEN ====="; cat out/fehler.txt; exit 1; fi
           if [ "${{ matrix.arch }}" = "64" ]; then
             cp ../../bass64/*.dll out/
-            g++ -s -w $OPT -mwindows -static-libgcc -static-libstdc++ -o out/MyOsu.exe out/*.o out/bass.dll out/bass_fx.dll \
-              -lfreetype -lglew32 -ljpeg -ld3dcompiler_47 -ld3d11 -ldxgi -lopengl32 -lglu32 -lgdi32 \
-              -lcomctl32 -ldwmapi -lcomdlg32 -lpsapi -lws2_32 -lwinhttp -lwinmm -Wl,-Bstatic -lpthread -Wl,-Bdynamic -latomic
+            SYSLIBS="-ld3dcompiler_47 -ld3d11 -ldxgi -lopengl32 -lglu32 -lgdi32 -lcomctl32 -ldwmapi -lcomdlg32 -lpsapi -lws2_32 -lwinhttp -lwinmm -lole32 -luuid"
+            # everything static (no MSYS2 DLLs that could clash with the DLLs of the official McOsu), only BASS stays a DLL
+            if g++ -s -w $OPT -mwindows -static -o out/MyOsu.exe out/*.o out/bass.dll out/bass_fx.dll \
+                $(pkg-config --static --libs freetype2) -lglew32 -ljpeg $SYSLIBS -lpthread -latomic; then
+              echo "===== STATIC LINK OK ====="
+            else
+              echo "===== static link failed, linking dynamically ====="
+              g++ -s -w $OPT -mwindows -static-libgcc -static-libstdc++ -o out/MyOsu.exe out/*.o out/bass.dll out/bass_fx.dll \
+                -lfreetype -lglew32 -ljpeg $SYSLIBS -Wl,-Bstatic -lpthread -Wl,-Bdynamic -latomic
+            fi
           else
             LIBDIRS=""
             for d in libraries/*/lib/windows; do LIBDIRS="$LIBDIRS -L$d"; done
@@ -135,15 +142,13 @@ jobs:
           if [ "${{ matrix.arch }}" = "64" ]; then
             cp out/bass.dll out/bass_fx.dll dist/
             # every MSYS2 DLL the exe needs (freetype + its dependencies, glew, libjpeg, ...)
-            ldd out/MyOsu.exe | awk '/\/mingw64\//{print $3}' | sort -u | xargs -r -I{} cp "{}" dist/ || true
+            ldd out/MyOsu.exe | awk '/\/${{ matrix.mingw }}\//{print $3}' | sort -u | xargs -r -I{} cp "{}" dist/ || true
+            echo "===== DLLs the exe needs ====="; ldd out/MyOsu.exe || true
           else
             cp build/*.dll dist/
           fi
           mkdir -p dist/myosu_shaders
           cp ../../myosu_shaders/* dist/myosu_shaders/
-          for dll in libwinpthread-1.dll libatomic-1.dll libgcc_s_dw2-1.dll libgcc_s_seh-1.dll libstdc++-6.dll; do
-            if [ -f "/${{ matrix.mingw }}/bin/$dll" ]; then cp "/${{ matrix.mingw }}/bin/$dll" dist/; fi
-          done
           ls -la dist
 
       - uses: actions/upload-artifact@v4
