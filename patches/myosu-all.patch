@@ -1,5 +1,5 @@
 diff --git a/src/App/Osu/Osu.cpp b/src/App/Osu/Osu.cpp
-index ac2d685..84d8aed 100644
+index ac2d685..5320ab9 100644
 --- a/src/App/Osu/Osu.cpp
 +++ b/src/App/Osu/Osu.cpp
 @@ -39,6 +39,10 @@
@@ -19,7 +19,7 @@ index ac2d685..84d8aed 100644
  ConVar osu_mods("osu_mods", "", FCVAR_NONE);
 +// hidden-rx: Relax as a permanent option instead of a mod
 +ConVar osu_relax_option("osu_relax_option", false, FCVAR_NONE, "play with Relax without it being a mod (survives Reset All Mods)");
-+ConVar osu_relax_hide_indicator("osu_relax_hide_indicator", true, FCVAR_NONE, "never show Relax in mod icons, score lists or Discord status");
++ConVar osu_relax_hide("osu_relax_hide", false, FCVAR_NONE, "hide Relax in mod icons and score lists (always hidden in Aoy mode)");
  ConVar osu_mod_touchdevice("osu_mod_touchdevice", false, FCVAR_NONE, "used for force applying touch pp nerf always");
  ConVar osu_mod_fadingcursor("osu_mod_fadingcursor", false, FCVAR_NONE);
  ConVar osu_mod_fadingcursor_combo("osu_mod_fadingcursor_combo", 50.0f, FCVAR_NONE);
@@ -75,10 +75,10 @@ index 3d319fe..eb4e5ab 100644
  	void onPlayfieldChange(UString oldValue, UString newValue);
 diff --git a/src/App/Osu/OsuAoyMode.cpp b/src/App/Osu/OsuAoyMode.cpp
 new file mode 100644
-index 0000000..f525d5f
+index 0000000..42898ef
 --- /dev/null
 +++ b/src/App/Osu/OsuAoyMode.cpp
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,184 @@
 +//================ myosu: Aoy mode ================//
 +//
 +// Purpose:		while playing: CS 0 (HR: 1.5), AR 10.3, OD 10 (HR: 11).
@@ -188,6 +188,12 @@ index 0000000..f525d5f
 +	return osu_aoy_mode.getBool();
 +}
 +
++bool OsuAoyMode::isRelaxHidden()
++{
++	static ConVar *hide = convar->getConVarByName("osu_relax_hide");
++	return osu_aoy_mode.getBool() || (hide != NULL && hide->getBool());
++}
++
 +float OsuAoyMode::getCS(bool hardRock)
 +{
 +	return (hardRock ? osu_aoy_cs_hr.getFloat() : osu_aoy_cs.getFloat());
@@ -259,10 +265,10 @@ index 0000000..f525d5f
 +}
 diff --git a/src/App/Osu/OsuAoyMode.h b/src/App/Osu/OsuAoyMode.h
 new file mode 100644
-index 0000000..a5a8ea0
+index 0000000..f0441fe
 --- /dev/null
 +++ b/src/App/Osu/OsuAoyMode.h
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,46 @@
 +//================ myosu: Aoy mode ================//
 +//
 +// Purpose:		while playing: CS 0 (HR: 1.5), AR 10.3, OD 10 (HR: 11).
@@ -294,6 +300,7 @@ index 0000000..a5a8ea0
 +	};
 +
 +	bool isActive();
++	bool isRelaxHidden(); // option "Hide Relax", or Aoy mode is on
 +
 +	// gameplay values (only used while playing)
 +	float getCS(bool hardRock);
@@ -1634,7 +1641,7 @@ index 1d43a78..b9844ae 100644
  		m_modButtonAutopilot->click();
  	if (key == (KEYCODE)OsuKeyBindings::MOD_SPUNOUT.getInt())
 diff --git a/src/App/Osu/OsuOptionsMenu.cpp b/src/App/Osu/OsuOptionsMenu.cpp
-index a8a5508..338957c 100644
+index a8a5508..8043432 100644
 --- a/src/App/Osu/OsuOptionsMenu.cpp
 +++ b/src/App/Osu/OsuOptionsMenu.cpp
 @@ -25,6 +25,7 @@
@@ -1730,7 +1737,7 @@ index a8a5508..338957c 100644
 +		npsSlider->setChangeCallback( fastdelegate::MakeDelegate(this, &OsuOptionsMenu::onSliderChangeInt) );
 +		npsSlider->setKeyDelta(1);
 +	}
-+	addCheckbox("Hide Relax indicator", "Never show Relax in mod icons, score lists or Discord status.", convar->getConVarByName("osu_relax_hide_indicator"));
++	addCheckbox("Hide Relax", "Don't show Relax in mod icons and score lists.\nIn Aoy mode it is always hidden.", convar->getConVarByName("osu_relax_hide"));
  	addCheckbox("Show Skip Button during Intro", "Skip intro to first hitobject.", convar->getConVarByName("osu_skip_intro_enabled"));
  	addCheckbox("Show Skip Button during Breaks", "Skip breaks in the middle of beatmaps.", convar->getConVarByName("osu_skip_breaks_enabled"));
  	addSpacer();
@@ -1953,10 +1960,18 @@ index 0000000..aebf4bc
 +
 +#endif
 diff --git a/src/App/Osu/OsuRankingScreen.cpp b/src/App/Osu/OsuRankingScreen.cpp
-index c715bb8..85b74cd 100644
+index c715bb8..868f69a 100644
 --- a/src/App/Osu/OsuRankingScreen.cpp
 +++ b/src/App/Osu/OsuRankingScreen.cpp
-@@ -36,6 +36,7 @@
+@@ -20,6 +20,7 @@
+ #include "CBaseUIImage.h"
+ #include "CBaseUILabel.h"
+ 
++#include "OsuAoyMode.h"
+ #include "Osu.h"
+ #include "OsuSkin.h"
+ #include "OsuSkinImage.h"
+@@ -36,6 +37,7 @@
  #include "OsuUIRankingScreenInfoLabel.h"
  #include "OsuUIRankingScreenRankingPanel.h"
  #include "OsuUISongBrowserScoreButton.h"
@@ -1964,7 +1979,7 @@ index c715bb8..85b74cd 100644
  
  ConVar osu_rankingscreen_topbar_height_percent("osu_rankingscreen_topbar_height_percent", 0.785f, FCVAR_NONE);
  ConVar osu_rankingscreen_pp("osu_rankingscreen_pp", true, FCVAR_NONE);
-@@ -104,6 +105,9 @@ public:
+@@ -104,6 +106,9 @@ public:
  		const Color bottomColor = 0xdd493a0f;
  		g->setColor(0xffffffff);
  		g->fillGradient(m_vPos.x, m_vPos.y, m_vSize.x, m_vSize.y, topColor, topColor, bottomColor, bottomColor);
@@ -1974,16 +1989,16 @@ index c715bb8..85b74cd 100644
  	}
  
  	void setVisible2(bool visible2) {m_bVisible2 = visible2;}
-@@ -314,7 +318,7 @@ void OsuRankingScreen::draw(Graphics *g)
+@@ -314,7 +319,7 @@ void OsuRankingScreen::draw(Graphics *g)
  		drawModImage(g, m_osu->getSkin()->getSelectionModTarget(), modPos, modPosMax);
  	if (m_bModSpunout)
  		drawModImage(g, m_osu->getSkin()->getSelectionModSpunOut(), modPos, modPosMax);
 -	if (m_bModRelax)
-+	if (m_bModRelax && !convar->getConVarByName("osu_relax_hide_indicator")->getBool())
++	if (m_bModRelax && !OsuAoyMode::isRelaxHidden())
  		drawModImage(g, m_osu->getSkin()->getSelectionModRelax(), modPos, modPosMax);
  	if (m_bModNF)
  		drawModImage(g, m_osu->getSkin()->getSelectionModNoFail(), modPos, modPosMax);
-@@ -501,6 +505,7 @@ void OsuRankingScreen::setVisible(bool visible)
+@@ -501,6 +506,7 @@ void OsuRankingScreen::setVisible(bool visible)
  
  void OsuRankingScreen::setScore(OsuScore *score)
  {
@@ -1991,7 +2006,7 @@ index c715bb8..85b74cd 100644
  	m_rankingPanel->setScore(score);
  	setGrade(score->getGrade());
  	setIndex(score->getIndex());
-@@ -555,6 +560,7 @@ void OsuRankingScreen::setScore(OsuScore *score)
+@@ -555,6 +561,7 @@ void OsuRankingScreen::setScore(OsuScore *score)
  
  void OsuRankingScreen::setScore(OsuDatabase::Score score, UString dateTime)
  {
@@ -1999,7 +2014,7 @@ index c715bb8..85b74cd 100644
  	m_bIsLegacyScore = score.isLegacyScore;
  	m_bIsImportedLegacyScore = score.isImportedLegacyScore;
  	m_bIsUnranked = false;
-@@ -665,7 +671,7 @@ void OsuRankingScreen::updateLayout()
+@@ -665,7 +672,7 @@ void OsuRankingScreen::updateLayout()
  	m_rankingIndex->setBackgroundColor(0xff745e13);
  	m_rankingIndex->setRelPosY(m_rankings->getSize().y + 1);
  
@@ -2503,15 +2518,23 @@ index 0000000..cbbc99c
 +
 +#endif
 diff --git a/src/App/Osu/OsuScore.cpp b/src/App/Osu/OsuScore.cpp
-index 0f7f950..7296495 100644
+index 0f7f950..329dddc 100644
 --- a/src/App/Osu/OsuScore.cpp
 +++ b/src/App/Osu/OsuScore.cpp
-@@ -590,7 +590,7 @@ UString OsuScore::getModsStringForRichPresence()
+@@ -10,6 +10,7 @@
+ #include "Engine.h"
+ #include "ConVar.h"
+ 
++#include "OsuAoyMode.h"
+ #include "Osu.h"
+ #include "OsuMultiplayer.h"
+ #include "OsuBeatmap.h"
+@@ -590,7 +591,7 @@ UString OsuScore::getModsStringForRichPresence()
  		modsString.append("SD");
  	if (m_osu->getModDT())
  		modsString.append("DT");
 -	if (m_osu->getModRelax())
-+	if (m_osu->getModRelax() && !convar->getConVarByName("osu_relax_hide_indicator")->getBool())
++	if (m_osu->getModRelax() && !OsuAoyMode::isRelaxHidden())
  		modsString.append("RX");
  	if (m_osu->getModHT())
  		modsString.append("HT");
@@ -2772,10 +2795,18 @@ index d9f2124..68174a6 100644
  
  			if (angleDiff < -PI)
 diff --git a/src/App/Osu/OsuUISongBrowserScoreButton.cpp b/src/App/Osu/OsuUISongBrowserScoreButton.cpp
-index 9f47f27..1ad6402 100644
+index 9f47f27..5458fc0 100644
 --- a/src/App/Osu/OsuUISongBrowserScoreButton.cpp
 +++ b/src/App/Osu/OsuUISongBrowserScoreButton.cpp
-@@ -35,6 +35,7 @@
+@@ -16,6 +16,7 @@
+ #include "Mouse.h"
+ #include "Keyboard.h"
+ 
++#include "OsuAoyMode.h"
+ #include "Osu.h"
+ #include "OsuIcons.h"
+ #include "OsuSkin.h"
+@@ -35,6 +36,7 @@
  
  #include <chrono>
  
@@ -2783,7 +2814,7 @@ index 9f47f27..1ad6402 100644
  ConVar *OsuUISongBrowserScoreButton::m_osu_scores_sort_by_pp_ref = NULL;
  ConVar *OsuUISongBrowserScoreButton::m_osu_mods_ref = NULL;
  ConVar *OsuUISongBrowserScoreButton::m_osu_speed_override_ref = NULL;
-@@ -190,7 +191,12 @@ void OsuUISongBrowserScoreButton::draw(Graphics *g)
+@@ -190,7 +192,12 @@ void OsuUISongBrowserScoreButton::draw(Graphics *g)
  		g->setAlpha(0.75f);
  		g->drawString(usernameFont, string);
  		g->translate(-0.75f, -0.75f);
@@ -2797,7 +2828,7 @@ index 9f47f27..1ad6402 100644
  		g->drawString(usernameFont, string);
  	}
  	g->popTransform();
-@@ -832,6 +838,10 @@ void OsuUISongBrowserScoreButton::setScore(const OsuDatabase::Score &score, cons
+@@ -832,6 +839,10 @@ void OsuUISongBrowserScoreButton::setScore(const OsuDatabase::Score &score, cons
  	UString achievedOn = "Achieved on ";
  	achievedOn.append(m_sScoreDateTime);
  
@@ -2808,12 +2839,12 @@ index 9f47f27..1ad6402 100644
  	// tooltip
  	m_tooltipLines.clear();
  	m_tooltipLines.push_back(achievedOn);
-@@ -943,7 +953,7 @@ UString OsuUISongBrowserScoreButton::getModsStringForDisplay(int mods)
+@@ -943,7 +954,7 @@ UString OsuUISongBrowserScoreButton::getModsStringForDisplay(int mods)
  		modsString.append("SD,");
  	if (mods & OsuReplay::Mods::DoubleTime)
  		modsString.append("DT,");
 -	if (mods & OsuReplay::Mods::Relax)
-+	if ((mods & OsuReplay::Mods::Relax) && !convar->getConVarByName("osu_relax_hide_indicator")->getBool())
++	if ((mods & OsuReplay::Mods::Relax) && !OsuAoyMode::isRelaxHidden())
  		modsString.append("Relax,");
  	if (mods & OsuReplay::Mods::HalfTime)
  		modsString.append("HT,");
