@@ -8,10 +8,32 @@ jobs:
   build:
     runs-on: windows-latest
     strategy:
-      fail-fast: false   # if 64-bit fails, the 32-bit build still finishes
+      fail-fast: false   # one variant failing does not stop the others
       matrix:
         include:
           - arch: 64
+            cpu: Intel-ArrowLake
+            march: arrowlake
+            fallback: alderlake
+            defines: ""
+            msystem: MINGW64
+            pkg: x86_64
+            mingw: mingw64
+            extra: mingw-w64-x86_64-freetype mingw-w64-x86_64-glew mingw-w64-x86_64-libjpeg-turbo
+          - arch: 64
+            cpu: AMD-Zen4
+            march: znver4
+            fallback: znver3
+            defines: "-DMYOSU_NO_DEFAULT_AFFINITY"
+            msystem: MINGW64
+            pkg: x86_64
+            mingw: mingw64
+            extra: mingw-w64-x86_64-freetype mingw-w64-x86_64-glew mingw-w64-x86_64-libjpeg-turbo
+          - arch: 64
+            cpu: Allgemein
+            march: x86-64-v2
+            fallback: x86-64
+            defines: "-DMYOSU_NO_DEFAULT_AFFINITY"
             msystem: MINGW64
             pkg: x86_64
             mingw: mingw64
@@ -99,10 +121,13 @@ jobs:
             for d in libraries/*/include; do INC="$INC -I$d"; done
           fi
           export INC
-          # optimized for Intel Core Ultra 200 (Arrow Lake), older GCC: Alder Lake
-          if echo | gcc -march=arrowlake -E -x c - >/dev/null 2>&1; then ARCH=arrowlake; else ARCH=alderlake; fi
-          echo "CPU target: $ARCH"
-          export OPT="-O3 -march=$ARCH -mtune=$ARCH -fomit-frame-pointer -fno-math-errno -flto"
+          # CPU target of this variant (fallback if the GCC is too old for it)
+          ARCH=${{ matrix.march }}
+          if ! echo | gcc -march=$ARCH -E -x c - >/dev/null 2>&1; then ARCH=${{ matrix.fallback }}; fi
+          TUNE=$ARCH
+          case "$ARCH" in x86-64*) TUNE=generic;; esac
+          echo "CPU target: $ARCH (tune $TUNE)"
+          export OPT="-O3 -march=$ARCH -mtune=$TUNE -fomit-frame-pointer -fno-math-errno -flto ${{ matrix.defines }}"
           export FLAGS="-std=c++11 $OPT -c -fmessage-length=0 -w -fpermissive -D__GXX_EXPERIMENTAL_CXX0X__ -D__gl_glext_h_ -D__wgl_wglext_h_ -DWIN32STDMUTEX_H -DQWORD=ULONGLONG"
           : > out/fehler.txt
           find src -name '*.cpp' | xargs -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; g++ $FLAGS $INC -o "$o" "{}" 2> "$o.log" || { echo "{}" >> out/fehler.txt; cat "$o.log"; }'
@@ -141,6 +166,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MyOsu-${{ matrix.arch }}bit
+          name: MyOsu-${{ matrix.cpu }}
           path: McEngine/McEngine/dist/
           if-no-files-found: error
