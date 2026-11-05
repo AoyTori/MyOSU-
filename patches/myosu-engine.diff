@@ -1,3 +1,45 @@
+diff --git a/McEngine/src/Engine/Image.cpp b/McEngine/src/Engine/Image.cpp
+index 7b63ee5..1dc90a8 100644
+--- a/McEngine/src/Engine/Image.cpp
++++ b/McEngine/src/Engine/Image.cpp
+@@ -22,7 +22,7 @@ struct jpegErrorManager
+     struct jpeg_error_mgr pub;
+ 
+     // for returning to the caller
+-    jmp_buf setjmp_buffer;
++    void *setjmp_buffer[5]; // myosu: GCC builtin setjmp (msvcrt longjmp crashes on 64-bit MinGW)
+ };
+ 
+ void jpegErrorExit(j_common_ptr cinfo)
+@@ -36,7 +36,7 @@ void jpegErrorExit(j_common_ptr cinfo)
+ 
+ 	printf("JPEG Error: %s", jpegLastErrorMsg);
+ 
+-	longjmp(err->setjmp_buffer, 1);
++	__builtin_longjmp(err->setjmp_buffer, 1);
+ }
+ 
+ void Image::saveToImage(unsigned char *data, unsigned int width, unsigned int height, UString filepath)
+@@ -172,16 +172,16 @@ bool Image::loadRawImage()
+ 			jpegErrorManager err;
+ 			jpeg_decompress_struct cinfo;
+ 
+-			jpeg_create_decompress(&cinfo);
+-			cinfo.err = jpeg_std_error(&err.pub);
++			cinfo.err = jpeg_std_error(&err.pub); // myosu: error manager must be set before jpeg_create_decompress()
+ 			err.pub.error_exit = jpegErrorExit;
+-			if (setjmp(err.setjmp_buffer))
++			if (__builtin_setjmp(err.setjmp_buffer))
+ 			{
+ 			    jpeg_destroy_decompress(&cinfo);
+ 			    printf("Image Error: JPEG error (see above) in file %s\n", m_sFilePath.toUtf8());
+ 			    return false;
+ 			}
+ 
++			jpeg_create_decompress(&cinfo);
+ 			jpeg_mem_src(&cinfo, (unsigned char*)data, file.getFileSize());
+ #ifdef __APPLE__
+ 			const int headerRes = jpeg_read_header(&cinfo, boolean::TRUE); // HACKHACK: wtf is this boolean enum here suddenly required?
 diff --git a/McEngine/src/Engine/Renderer/DirectX11Interface.cpp b/McEngine/src/Engine/Renderer/DirectX11Interface.cpp
 index f887882..4f5c1df 100644
 --- a/McEngine/src/Engine/Renderer/DirectX11Interface.cpp
