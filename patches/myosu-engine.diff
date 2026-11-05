@@ -1,3 +1,16 @@
+diff --git a/McEngine/src/Engine/Font.cpp b/McEngine/src/Engine/Font.cpp
+index 5d269ec..27ad8ee 100644
+--- a/McEngine/src/Engine/Font.cpp
++++ b/McEngine/src/Engine/Font.cpp
+@@ -108,7 +108,7 @@ void McFont::init()
+ 	// now render all glyphs into the atlas
+ 	for (size_t i=0; i<m_vGlyphs.size(); i++)
+ 	{
+-		renderFTGlyphToTextureAtlas(library, face, m_vGlyphs[i], m_textureAtlas, m_bAntialiasing, &m_vGlyphMetrics);
++		renderFTGlyphToTextureAtlas(library, face, m_vGlyphs[i], m_textureAtlas, true, &m_vGlyphMetrics); // myosu: always render anti-aliased, the FreeType mono path corrupted the heap on 64-bit (console font)
+ 	}
+ 
+ 	// shutdown freetype
 diff --git a/McEngine/src/Engine/Image.cpp b/McEngine/src/Engine/Image.cpp
 index 7b63ee5..1dc90a8 100644
 --- a/McEngine/src/Engine/Image.cpp
