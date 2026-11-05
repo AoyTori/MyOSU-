@@ -1,12 +1,12 @@
 diff --git a/McEngine/src/Engine/Renderer/DirectX11Interface.cpp b/McEngine/src/Engine/Renderer/DirectX11Interface.cpp
-index f887882..888a187 100644
+index f887882..4f5c1df 100644
 --- a/McEngine/src/Engine/Renderer/DirectX11Interface.cpp
 +++ b/McEngine/src/Engine/Renderer/DirectX11Interface.cpp
 @@ -25,6 +25,10 @@
  
  //#define MCENGINE_D3D11_CREATE_DEVICE_DEBUG
  
-+// myosu: flip model swapchain + tearing (lower latency in borderless/windowed), start with -noflip for the old one
++// myosu: flip model swapchain + tearing + max 1 queued frame (lower latency), only when started with -lowlatency (test)
 +static unsigned int g_myosuSwapChainFlags = 0;
 +static bool g_bMyosuTearing = false;
 +
@@ -20,7 +20,7 @@ index f887882..888a187 100644
 -		hr = D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE::D3D_DRIVER_TYPE_HARDWARE, NULL, createDeviceFlags, featureLevels, numFeatureLevels, D3D11_SDK_VERSION, &swapChainDesc, &m_swapChain, &m_device, &featureLevelOut, &m_deviceContext);
 +	{
 +		// myosu: try flip model + tearing first (Windows 10+), then flip model, then the old blit model
-+		const bool allowFlip = (engine->getArgs().find("-noflip") == -1);
++		const bool allowFlip = (engine->getArgs().find("-lowlatency") != -1);
 +		hr = E_FAIL;
 +		for (int attempt = (allowFlip ? 0 : 2); attempt < 3 && FAILED(hr); attempt++)
 +		{
@@ -42,7 +42,7 @@ index f887882..888a187 100644
 +		}
 +
 +		// myosu: at most 1 frame queued in the driver (like NVIDIA "low latency mode: ultra")
-+		if (SUCCEEDED(hr))
++		if (SUCCEEDED(hr) && allowFlip)
 +		{
 +			IDXGIDevice1 *dxgiDevice = NULL;
 +			if (SUCCEEDED(m_device->QueryInterface(__uuidof(IDXGIDevice1), (void**)&dxgiDevice)))
