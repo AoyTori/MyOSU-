@@ -15,10 +15,12 @@ jobs:
             msystem: MINGW32
             pkg: i686
             mingw: mingw32
+            extra: ""
           - arch: 64
             msystem: MINGW64
             pkg: x86_64
             mingw: mingw64
+            extra: mingw-w64-x86_64-freetype mingw-w64-x86_64-glew mingw-w64-x86_64-libjpeg-turbo
     defaults:
       run:
         shell: msys2 {0}
@@ -28,9 +30,7 @@ jobs:
       - uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ matrix.msystem }}
-          install: >-
-            mingw-w64-${{ matrix.pkg }}-gcc git unzip
-            mingw-w64-${{ matrix.pkg }}-freetype mingw-w64-${{ matrix.pkg }}-glew mingw-w64-${{ matrix.pkg }}-libjpeg-turbo
+          install: mingw-w64-${{ matrix.pkg }}-gcc git unzip ${{ matrix.extra }}
 
       - name: McEngine + McOsu holen, Patches anwenden
         run: |
@@ -94,7 +94,7 @@ jobs:
           if [ "${{ matrix.arch }}" = "64" ]; then
             # use the MSYS2 freetype/libjpeg headers (they must match the 64-bit libraries)
             for d in libraries/*/include; do case "$d" in *freetype*|*libjpeg*) ;; *) INC="$INC -I$d";; esac; done
-            INC="$INC -I/mingw64/include/freetype2"
+            INC="$INC -I/mingw64/include/freetype2 -I/mingw64/include/freetype2/freetype"
           else
             for d in libraries/*/include; do INC="$INC -I$d"; done
           fi
