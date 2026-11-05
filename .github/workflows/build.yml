@@ -12,27 +12,9 @@ jobs:
       matrix:
         include:
           - arch: 64
-            cpu: Intel-ArrowLake
-            march: arrowlake
-            fallback: alderlake
-            defines: ""
-            msystem: MINGW64
-            pkg: x86_64
-            mingw: mingw64
-            extra: mingw-w64-x86_64-freetype mingw-w64-x86_64-glew mingw-w64-x86_64-libjpeg-turbo
-          - arch: 64
-            cpu: AMD-Zen4
-            march: znver4
-            fallback: znver3
-            defines: "-DMYOSU_NO_DEFAULT_AFFINITY"
-            msystem: MINGW64
-            pkg: x86_64
-            mingw: mingw64
-            extra: mingw-w64-x86_64-freetype mingw-w64-x86_64-glew mingw-w64-x86_64-libjpeg-turbo
-          - arch: 64
             cpu: Allgemein
-            march: x86-64-v2
-            fallback: x86-64
+            march: x86-64-v3
+            fallback: haswell
             defines: "-DMYOSU_NO_DEFAULT_AFFINITY"
             msystem: MINGW64
             pkg: x86_64
@@ -166,6 +148,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MyOsu-${{ matrix.cpu }}
+          name: MyOsu
           path: McEngine/McEngine/dist/
           if-no-files-found: error
