@@ -127,7 +127,7 @@ jobs:
           TUNE=$ARCH
           case "$ARCH" in x86-64*) TUNE=generic;; esac
           echo "CPU target: $ARCH (tune $TUNE)"
-          export OPT="-O3 -march=$ARCH -mtune=$TUNE -fomit-frame-pointer -fno-math-errno -flto ${{ matrix.defines }}"
+          export OPT="-O3 -march=$ARCH -mtune=$TUNE -fomit-frame-pointer -fno-math-errno ${{ matrix.defines }}"
           export FLAGS="-std=c++11 $OPT -c -fmessage-length=0 -w -fpermissive -D__GXX_EXPERIMENTAL_CXX0X__ -D__gl_glext_h_ -D__wgl_wglext_h_ -DWIN32STDMUTEX_H -DQWORD=ULONGLONG"
           : > out/fehler.txt
           find src -name '*.cpp' | xargs -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; g++ $FLAGS $INC -o "$o" "{}" 2> "$o.log" || { echo "{}" >> out/fehler.txt; cat "$o.log"; }'
@@ -135,7 +135,7 @@ jobs:
           if [ -s out/fehler.txt ]; then echo "===== FEHLER IN DIESEN DATEIEN ====="; cat out/fehler.txt; exit 1; fi
           if [ "${{ matrix.arch }}" = "64" ]; then
             cp ../../bass64/*.dll out/
-            g++ -s -w $OPT -flto=auto -mwindows -static-libgcc -static-libstdc++ -o out/MyOsu.exe out/*.o out/bass.dll out/bass_fx.dll \
+            g++ -s -w $OPT -mwindows -static-libgcc -static-libstdc++ -o out/MyOsu.exe out/*.o out/bass.dll out/bass_fx.dll \
               -lfreetype -lglew32 -ljpeg -ld3dcompiler_47 -ld3d11 -ldxgi -lopengl32 -lglu32 -lgdi32 \
               -lcomctl32 -ldwmapi -lcomdlg32 -lpsapi -lws2_32 -lwinhttp -lwinmm -Wl,-Bstatic -lpthread -Wl,-Bdynamic -latomic
           else
