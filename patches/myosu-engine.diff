@@ -40,6 +40,21 @@ index 7b63ee5..1dc90a8 100644
  			jpeg_mem_src(&cinfo, (unsigned char*)data, file.getFileSize());
  #ifdef __APPLE__
  			const int headerRes = jpeg_read_header(&cinfo, boolean::TRUE); // HACKHACK: wtf is this boolean enum here suddenly required?
+diff --git a/McEngine/src/Engine/Main/main_Windows.cpp b/McEngine/src/Engine/Main/main_Windows.cpp
+index a30548e..255394e 100644
+--- a/McEngine/src/Engine/Main/main_Windows.cpp
++++ b/McEngine/src/Engine/Main/main_Windows.cpp
+@@ -923,6 +923,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
+ {
+ 	// NOTE: add -mwindows to linker options to disable console window if compiling with Eclipse
+ 
++	// myosu: write the engine log into myosu_log.txt (unbuffered, so the last line before a crash is in there)
++	if (freopen("myosu_log.txt", "w", stdout) != NULL)
++		setvbuf(stdout, NULL, _IONBF, 0);
++
+ 	// IPC URL protocol handler (1)
+ /*
+ 	const size_t sharedMemorySize = sizeof(char) * 4096;
 diff --git a/McEngine/src/Engine/Renderer/DirectX11Interface.cpp b/McEngine/src/Engine/Renderer/DirectX11Interface.cpp
 index f887882..4f5c1df 100644
 --- a/McEngine/src/Engine/Renderer/DirectX11Interface.cpp
