@@ -11,11 +11,6 @@ jobs:
       fail-fast: false   # if 64-bit fails, the 32-bit build still finishes
       matrix:
         include:
-          - arch: 32
-            msystem: MINGW32
-            pkg: i686
-            mingw: mingw32
-            extra: ""
           - arch: 64
             msystem: MINGW64
             pkg: x86_64
@@ -50,6 +45,11 @@ jobs:
             git apply --whitespace=nowarn /tmp/fix.patch || { echo "===== PATCH FEHLGESCHLAGEN: $p ====="; exit 1; }
           done
           cd ..
+          # engine changes (DX11: flip model + tearing, max 1 queued frame)
+          if [ -f patches/myosu-engine.diff ]; then
+            tr -d '\r' < patches/myosu-engine.diff > /tmp/engine.patch
+            (cd McEngine && git apply --whitespace=nowarn /tmp/engine.patch) || { echo "===== ENGINE PATCH FEHLGESCHLAGEN ====="; exit 1; }
+          fi
           cp -r McOsu/src/App/Osu McEngine/McEngine/src/App/Osu
           E=McEngine/McEngine/src/Engine/Engine.cpp
           sed -i 's|^//#include "Osu.h"|#include "Osu.h"|' "$E"
@@ -99,14 +99,18 @@ jobs:
             for d in libraries/*/include; do INC="$INC -I$d"; done
           fi
           export INC
-          export FLAGS="-std=c++11 -O3 -march=haswell -mtune=intel -fomit-frame-pointer -c -fmessage-length=0 -w -fpermissive -D__GXX_EXPERIMENTAL_CXX0X__ -D__gl_glext_h_ -D__wgl_wglext_h_ -DWIN32STDMUTEX_H -DQWORD=ULONGLONG"
+          # optimized for Intel Core Ultra 200 (Arrow Lake), older GCC: Alder Lake
+          if echo | gcc -march=arrowlake -E -x c - >/dev/null 2>&1; then ARCH=arrowlake; else ARCH=alderlake; fi
+          echo "CPU target: $ARCH"
+          export OPT="-O3 -march=$ARCH -mtune=$ARCH -fomit-frame-pointer -fno-math-errno -flto"
+          export FLAGS="-std=c++11 $OPT -c -fmessage-length=0 -w -fpermissive -D__GXX_EXPERIMENTAL_CXX0X__ -D__gl_glext_h_ -D__wgl_wglext_h_ -DWIN32STDMUTEX_H -DQWORD=ULONGLONG"
           : > out/fehler.txt
           find src -name '*.cpp' | xargs -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; g++ $FLAGS $INC -o "$o" "{}" 2> "$o.log" || { echo "{}" >> out/fehler.txt; cat "$o.log"; }'
-          find src -name '*.c' | xargs -r -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; gcc -O3 -march=haswell -mtune=intel -fomit-frame-pointer -c -w $INC -o "$o" "{}" 2> "$o.log" || { echo "{}" >> out/fehler.txt; cat "$o.log"; }'
+          find src -name '*.c' | xargs -r -P 4 -I{} sh -c 'o="out/$(echo "{}" | tr "/." "__").o"; gcc $OPT -c -w $INC -o "$o" "{}" 2> "$o.log" || { echo "{}" >> out/fehler.txt; cat "$o.log"; }'
           if [ -s out/fehler.txt ]; then echo "===== FEHLER IN DIESEN DATEIEN ====="; cat out/fehler.txt; exit 1; fi
           if [ "${{ matrix.arch }}" = "64" ]; then
             cp ../../bass64/*.dll out/
-            g++ -s -mwindows -static-libgcc -static-libstdc++ -o out/MyOsu.exe out/*.o out/bass.dll out/bass_fx.dll \
+            g++ -s -w $OPT -flto=auto -mwindows -static-libgcc -static-libstdc++ -o out/MyOsu.exe out/*.o out/bass.dll out/bass_fx.dll \
               -lfreetype -lglew32 -ljpeg -ld3dcompiler_47 -ld3d11 -ldxgi -lopengl32 -lglu32 -lgdi32 \
               -lcomctl32 -ldwmapi -lcomdlg32 -lpsapi -lws2_32 -lwinhttp -lwinmm -Wl,-Bstatic -lpthread -Wl,-Bdynamic -latomic
           else
