@@ -1821,10 +1821,10 @@ index a8a5508..8043432 100644
  	if (m_osu->getInstanceID() < 1)
 diff --git a/src/App/Osu/OsuPCoreAffinity.cpp b/src/App/Osu/OsuPCoreAffinity.cpp
 new file mode 100644
-index 0000000..705ca56
+index 0000000..73c7bdf
 --- /dev/null
 +++ b/src/App/Osu/OsuPCoreAffinity.cpp
-@@ -0,0 +1,129 @@
+@@ -0,0 +1,135 @@
 +//================ myosu: run on the performance cores ================//
 +//
 +// Purpose:		on hybrid Intel CPUs (P-cores + E-cores) the game thread can end up
@@ -1843,7 +1843,13 @@ index 0000000..705ca56
 +#include <string>
 +
 +ConVar osu_process_priority_realtime("osu_process_priority_realtime", false, FCVAR_NONE, "run the game with realtime priority (needs admin rights, otherwise Windows uses high), applied at startup");
-+ConVar osu_cpu_affinity("osu_cpu_affinity", "0-5", FCVAR_NONE, "CPUs the game may use, like in the task manager, e.g. \"0-5\" or \"0,1,4-7\" (empty = automatic P-core detection), applied at startup");
++// Intel build: the 6 P-cores of the Core Ultra 5 (CPU 0-5), other builds: automatic (empty)
++#ifdef MYOSU_NO_DEFAULT_AFFINITY
++#define MYOSU_DEFAULT_AFFINITY ""
++#else
++#define MYOSU_DEFAULT_AFFINITY "0-5"
++#endif
++ConVar osu_cpu_affinity("osu_cpu_affinity", MYOSU_DEFAULT_AFFINITY, FCVAR_NONE, "CPUs the game may use, like in the task manager, e.g. \"0-5\" or \"0,1,4-7\" (empty = automatic P-core detection), applied at startup");
 +ConVar osu_pcore_affinity("osu_pcore_affinity", true, FCVAR_NONE, "on hybrid CPUs, only run on the performance cores (P-cores), applied at startup");
 +
 +namespace
