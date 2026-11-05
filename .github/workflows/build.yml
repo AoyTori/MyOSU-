@@ -119,7 +119,7 @@ jobs:
             cp ../../bass64/*.dll out/
             SYSLIBS="-ld3dcompiler_47 -ld3d11 -ldxgi -lopengl32 -lglu32 -lgdi32 -lcomctl32 -ldwmapi -lcomdlg32 -lpsapi -lws2_32 -lwinhttp -lwinmm -lole32 -luuid"
             # everything static (no MSYS2 DLLs that could clash with the DLLs of the official McOsu), only BASS stays a DLL
-            if g++ -s -w $OPT -mwindows -static -o out/MyOsu.exe out/*.o out/bass.dll out/bass_fx.dll \
+            if g++ -s -w $OPT -mwindows -static -Wl,-Map=out/MyOsu.map -o out/MyOsu.exe out/*.o out/bass.dll out/bass_fx.dll \
                 $(pkg-config --static --libs freetype2) -lglew32 -ljpeg $SYSLIBS -lpthread -latomic; then
               echo "===== STATIC LINK OK ====="
             else
@@ -139,6 +139,7 @@ jobs:
           fi
           mkdir -p dist
           cp out/MyOsu.exe dist/
+          if [ -f out/MyOsu.map ]; then cp out/MyOsu.map dist/; fi   # for reading crash dumps
           if [ "${{ matrix.arch }}" = "64" ]; then
             cp out/bass.dll out/bass_fx.dll dist/
             # every MSYS2 DLL the exe needs (freetype + its dependencies, glew, libjpeg, ...)
