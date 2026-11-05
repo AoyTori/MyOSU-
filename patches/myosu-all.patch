@@ -1,5 +1,5 @@
 diff --git a/src/App/Osu/Osu.cpp b/src/App/Osu/Osu.cpp
-index ac2d685..5320ab9 100644
+index ac2d685..52f9416 100644
 --- a/src/App/Osu/Osu.cpp
 +++ b/src/App/Osu/Osu.cpp
 @@ -39,6 +39,10 @@
@@ -23,7 +23,31 @@ index ac2d685..5320ab9 100644
  ConVar osu_mod_touchdevice("osu_mod_touchdevice", false, FCVAR_NONE, "used for force applying touch pp nerf always");
  ConVar osu_mod_fadingcursor("osu_mod_fadingcursor", false, FCVAR_NONE);
  ConVar osu_mod_fadingcursor_combo("osu_mod_fadingcursor_combo", 50.0f, FCVAR_NONE);
-@@ -299,6 +306,7 @@ Osu::Osu(Osu2 *osu2, int instanceID)
+@@ -202,6 +209,7 @@ Osu::Osu(Osu2 *osu2, int instanceID)
+ 	m_experimentalMods.push_back(convar->getConVarByName("osu_mod_approach_different"));
+ 
+ 	// engine settings/overrides
++	debugLog("myosu: init A start\n");
+ 	engine->getSound()->setOnOutputDeviceChange([this] {onAudioOutputDeviceChange();});
+ 	openvr->setDrawCallback( fastdelegate::MakeDelegate(this, &Osu::drawVR) );
+ 	if (openvr->isReady()) // automatically enable VR mode if it was compiled with OpenVR support and is available
+@@ -226,6 +234,7 @@ Osu::Osu(Osu2 *osu2, int instanceID)
+ 
+ 	osu_resolution.setValue(UString::format("%ix%i", engine->getScreenWidth(), engine->getScreenHeight()));
+ 
++	debugLog("myosu: init B steam\n");
+ 	// init steam rich presence localization
+ 	steam->setRichPresence("steam_display", "#Status");
+ 	steam->setRichPresence("status", "...");
+@@ -283,6 +292,7 @@ Osu::Osu(Osu2 *osu2, int instanceID)
+ 		env->setWindowResizable(false);
+ 	}
+ 
++	debugLog("myosu: init C appdata\n");
+ 	// generate default osu! appdata user path
+ 	UString userDataPath = env->getUserDataPath();
+ 	if (userDataPath.length() > 1)
+@@ -299,6 +309,7 @@ Osu::Osu(Osu2 *osu2, int instanceID)
  	osu_volume_master.setCallback( fastdelegate::MakeDelegate(this, &Osu::onMasterVolumeChange) );
  	osu_volume_music.setCallback( fastdelegate::MakeDelegate(this, &Osu::onMusicVolumeChange) );
  	osu_speed_override.setCallback( fastdelegate::MakeDelegate(this, &Osu::onSpeedChange) );
@@ -31,7 +55,79 @@ index ac2d685..5320ab9 100644
  	osu_pitch_override.setCallback( fastdelegate::MakeDelegate(this, &Osu::onPitchChange) );
  
  	m_osu_playfield_rotation->setCallback( fastdelegate::MakeDelegate(this, &Osu::onPlayfieldChange) );
-@@ -867,6 +875,11 @@ void Osu::update()
+@@ -396,6 +407,7 @@ Osu::Osu(Osu2 *osu2, int instanceID)
+ 	m_bFireDelayedFontReloadAndResolutionChangeToFixDesyncedUIScaleScheduled = false;
+ 
+ 	// debug
++	debugLog("myosu: init D windowmanager\n");
+ 	m_windowManager = new CWindowManager();
+ 	/*
+ 	DebugMonitor *dm = new DebugMonitor();
+@@ -406,6 +418,7 @@ Osu::Osu(Osu2 *osu2, int instanceID)
+ 	// renderer
+ 	g_vInternalResolution = engine->getScreenSize();
+ 
++	debugLog("myosu: init E rendertargets\n");
+ 	m_backBuffer = engine->getResourceManager()->createRenderTarget(0, 0, getScreenWidth(), getScreenHeight());
+ 	m_playfieldBuffer = engine->getResourceManager()->createRenderTarget(0, 0, 64, 64);
+ 	m_sliderFrameBuffer = engine->getResourceManager()->createRenderTarget(0, 0, getScreenWidth(), getScreenHeight());
+@@ -413,18 +426,25 @@ Osu::Osu(Osu2 *osu2, int instanceID)
+ 	m_frameBuffer2 = engine->getResourceManager()->createRenderTarget(0, 0, 64, 64);
+ 
+ 	// load a few select subsystems very early
++	debugLog("myosu: init F notificationoverlay\n");
+ 	m_notificationOverlay = new OsuNotificationOverlay(this);
++	debugLog("myosu: init G score\n");
+ 	m_score = new OsuScore(this);
++	debugLog("myosu: init H updatehandler\n");
+ 	m_updateHandler = new OsuUpdateHandler();
+ 
+ 	// exec the main config file (this must be right here!)
+ 	if (m_iInstanceID < 2)
+ 	{
++		debugLog("myosu: init I cfg underride\n");
+ 		Console::execConfigFile("underride"); // same as override, but for defaults
++		debugLog("myosu: init J cfg osu\n");
+ 		Console::execConfigFile(isInVRMode() ? "osuvr" : "osu");
++		debugLog("myosu: init K cfg override\n");
+ 		Console::execConfigFile("override"); // used for quickfixing live builds without redeploying/recompiling
+ 	}
+ 
++	debugLog("myosu: init L updatemods\n");
+ 	// update mod settings
+ 	updateMods();
+ 
+@@ -432,6 +452,7 @@ Osu::Osu(Osu2 *osu2, int instanceID)
+ 	const int baseDPI = 96;
+ 	const int newDPI = Osu::getUIScale(this) * baseDPI;
+ 
++	debugLog("myosu: init M fonts\n");
+ 	McFont *defaultFont = engine->getResourceManager()->loadFont("weblysleekuisb.ttf", "FONT_DEFAULT", 15, true, newDPI);
+ 	m_titleFont = engine->getResourceManager()->loadFont("SourceSansPro-Semibold.otf", "FONT_OSU_TITLE", 60, true, newDPI);
+ 	m_subTitleFont = engine->getResourceManager()->loadFont("SourceSansPro-Semibold.otf", "FONT_OSU_SUBTITLE", 21, true, newDPI);
+@@ -476,17 +497,21 @@ Osu::Osu(Osu2 *osu2, int instanceID)
+ 	}
+ 
+ 	// load subsystems, add them to the screens array
++	debugLog("myosu: init N screens\n");
+ 	m_tooltipOverlay = new OsuTooltipOverlay(this);
+ 	m_vr = new OsuVR(this);
+ 	m_multiplayer = new OsuMultiplayer(this);
+ 	m_mainMenu = new OsuMainMenu(this);
++	debugLog("myosu: init O optionsmenu\n");
+ 	m_optionsMenu = new OsuOptionsMenu(this);
+ 	m_songBrowser2 = new OsuSongBrowser2(this);
+ 	m_backgroundImageHandler = new OsuBackgroundImageHandler();
++	debugLog("myosu: init P modselector\n");
+ 	m_modSelector = new OsuModSelector(this);
+ 	m_rankingScreen = new OsuRankingScreen(this);
+ 	m_userStatsScreen = new OsuUserStatsScreen(this);
+ 	m_pauseMenu = new OsuPauseMenu(this);
++	debugLog("myosu: init Q hud\n");
+ 	m_hud = new OsuHUD(this);
+ 	m_vrTutorial = new OsuVRTutorial(this);
+ 	m_changelog = new OsuChangelog(this);
+@@ -867,6 +892,11 @@ void Osu::update()
  {
  	const int wheelDelta = engine->getMouse()->getWheelDeltaVertical(); // HACKHACK: songbrowser focus
  
@@ -43,7 +139,7 @@ index ac2d685..5320ab9 100644
  	if (m_skin != NULL)
  		m_skin->update();
  
-@@ -1226,7 +1239,7 @@ void Osu::updateMods()
+@@ -1226,7 +1256,7 @@ void Osu::updateMods()
  
  	m_bModAuto = osu_mods.getString().find("auto") != -1;
  	m_bModAutopilot = osu_mods.getString().find("autopilot") != -1;
@@ -52,7 +148,7 @@ index ac2d685..5320ab9 100644
  	m_bModSpunout = osu_mods.getString().find("spunout") != -1;
  	m_bModTarget = osu_mods.getString().find("practicetarget") != -1;
  	m_bModScorev2 = osu_mods.getString().find("v2") != -1;
-@@ -2752,3 +2765,8 @@ bool Osu::findIgnoreCase(const std::string &haystack, const std::string &needle)
+@@ -2752,3 +2782,8 @@ bool Osu::findIgnoreCase(const std::string &haystack, const std::string &needle)
  
  	return (it != haystack.end());
  }
